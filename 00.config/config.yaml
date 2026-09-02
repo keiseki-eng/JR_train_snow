@@ -5,9 +5,9 @@ FEATURE:
     # '年月日',
     '列車番号',
     '停車駅名',
-    'フェンダー部分(東京方向)',
-    '台車部分',
-    'フェンダー部分(金沢方向)',
+    # 'フェンダー部分(東京方向)',
+    # '台車部分',
+    # 'フェンダー部分(金沢方向)',
     # '合計',
     # '回送列車フラグ',
     # '停車時刻',
@@ -31,8 +31,8 @@ FEATURE:
 
 # LightGBM のパラメータ設定
 MODEL_PARAMS:
-    "objective": "regression",
-    "metric": "rmse",
+    "objective": "regression"
+    "metric": "rmse"
     "alpha": 0.8
     'boosting_type': 'gbdt'
     "min_data_in_leaf": 50
