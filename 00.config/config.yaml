@@ -1,0 +1,70 @@
+# 特徴量リストの定義
+FEATURE:
+  "FEATURE_LIST":
+    [
+    "land_toshi",
+    "land_chisei", 
+    "land_road_cond",
+    "reform_exterior_date", 
+    'total_floor_area',
+    'building_area',
+    'building_structure',
+    'building_land_area',
+    'land_area_all',
+    'land_youto',
+    'management_form',
+    'room_count',
+    'unit_area',
+    'floor_plan_code',
+    'reform_date',
+    'reform_wet_area_date',
+    'reform_interior_date',
+    'post1',
+    'addr1_1',
+    'addr1_2', 
+    'bus_time1',
+    'walk_distance1',
+    'bus_time2',
+    'walk_distance2',
+    'house_kanrinin',
+    'madori_number_all',
+    'money_rimawari_now',
+    'parking_distance',
+    'school_ele_distance',
+    'school_jun_distance',
+    'convenience_distance',
+    'super_distance',
+    'hospital_distance',
+    'park_distance',
+    'drugstore_distance',
+    'bank_distance',
+    'building_type',
+    'building_age',
+    'years_since_renovation',
+    'addr1+2',
+      ]
+  "CATEGORICAL_COLS":
+   [
+   "building_structure", 
+   "management_form", 
+   "floor_plan_code", 
+   "house_kanrinin", 
+   "land_youto", 
+   "building_type",
+   "addr1+2"
+   ]
+
+# LightGBM のパラメータ設定
+MODEL_PARAMS:
+    "objective": "regression_l1"
+    "metric": "None"     # ← fevalでMAPEを見るならこれでOK
+    "alpha": 0.8
+    'boosting_type': 'gbdt'
+    "min_data_in_leaf": 50
+    "learning_rate": 0.05
+    "num_leaves": 64
+    "max_depth": -1
+    "feature_fraction": 0.8
+    "bagging_fraction": 0.8
+    "bagging_freq": 1
+    "verbosity": -1
