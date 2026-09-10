@@ -1,0 +1,7 @@
+# ファイルパスの定義
+
+# 中間ファイル
+INTERIUM_PATH:
+    "train_data": "/home/keiseki/JR_train_snow/20.Data/train_data_all.pkl"
+    # testデータに列車番号由来のダイヤ、金沢着雪ゼロ列車フラグを付与したもの
+    "test_data": "/home/keiseki/JR_train_snow/20.Data/test_data_all(0910).pkl"
