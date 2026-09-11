@@ -11,21 +11,6 @@ FEATURE:
     # '合計',
     # '回送列車フラグ',
     # '停車時刻',
-    '金沢',
-    '新高岡',
-    '富山',
-    '黒部宇奈月温泉',
-    '糸魚川',
-    '上越妙高',
-    '飯山',
-    '長野',
-    '金沢着雪ゼロ列車フラグ', 
-    ]
-  "CATEGORICAL_COLS":
-   [
-    # '年月日', 
-    '列車番号',
-    # '停車駅名',
     # '金沢',
     # '新高岡',
     # '富山',
@@ -34,10 +19,19 @@ FEATURE:
     # '上越妙高',
     # '飯山',
     # '長野',
-    '金沢着雪ゼロ列車フラグ'
-   ]
+    '金沢着雪ゼロ列車フラグ',
+    ]
 
-# 気象データは数が多いので別定義
+  "CATEGORICAL_COLS":
+    [
+    '列車番号',
+    '金沢着雪ゼロ列車フラグ'
+    ]
+
+
+# ==========================================
+# 気象データ
+# ==========================================
 WEATHER_FEATURE:
   locations:
     - 富山
@@ -86,24 +80,61 @@ WEATHER_FEATURE:
     - "23_00"
     - "0_00"
 
+
 WEATHER_CATEGORY:
   "WEATHER_CATEGORY_LIST":
     [
     '風向',
-  
-    ] 
+    ]
 
+
+# ==========================================
+# 積雪計データ
+# ==========================================
+SNOW_FEATURE:
+  locations:
+    - 富山野々上
+    # 実際の「地域名」の値に合わせて追加
+    # - ○○
+    # - ○○
+
+  variables:
+    - 積雪深_軌道_
+    - 積雪深_側溝_
+    - 積雪深_軌道A_
+    - 積雪深_軌道B_
+
+  statistics:
+    - mean
+    - max
+    - min
+
+  time_zones:
+    - "0-6"
+    - "6-12"
+    - "12-18"
+    - "18-24"
+
+
+# 積雪計のカテゴリカル変数
+SNOW_CATEGORY:
+  "SNOW_CATEGORY_LIST":
+    []
+
+
+# ==========================================
 # LightGBM のパラメータ設定
+# ==========================================
 MODEL_PARAMS:
-    "objective": "regression"
-    "metric": "rmse"
-    "alpha": 0.8
-    'boosting_type': 'gbdt'
-    "min_data_in_leaf": 50
-    "learning_rate": 0.05
-    "num_leaves": 64
-    "max_depth": -1
-    "feature_fraction": 0.8
-    "bagging_fraction": 0.8
-    "bagging_freq": 1
-    "verbosity": -1
+  "objective": "regression"
+  "metric": "rmse"
+  "alpha": 0.8
+  "boosting_type": "gbdt"
+  "min_data_in_leaf": 50
+  "learning_rate": 0.05
+  "num_leaves": 64
+  "max_depth": -1
+  "feature_fraction": 0.8
+  "bagging_fraction": 0.8
+  "bagging_freq": 1
+  "verbosity": -1

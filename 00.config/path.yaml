@@ -4,9 +4,13 @@
 INTERIUM_PATH:
     # "train_data": "/home/keiseki/JR_train_snow/20.Data/train_data_all.pkl"
     #  上記に日にちごとの気象条件を加えたもの
-    "train_data": "/home/keiseki/JR_train_snow/20.Data/train_data_all_with_weather.pkl"
+    # "train_data": "/home/keiseki/JR_train_snow/20.Data/train_data_all_with_weather.pkl"
+    # 上記に６時間毎にまとめた積雪計のデータを追加
+    "train_data": "/home/keiseki/JR_train_snow/20.Data/train_weather_snow.pkl"
 
     # testデータに列車番号由来のダイヤ、金沢着雪ゼロ列車フラグを付与したもの
     # "test_data": "/home/keiseki/JR_train_snow/20.Data/test_data_all(0910).pkl"
     # 上記に日にちごとの気象条件を加えたもの
-    "test_data": "/home/keiseki/JR_train_snow/20.Data/test_data_all_with_weather.pkl"
+    # "test_data": "/home/keiseki/JR_train_snow/20.Data/test_data_all_with_weather.pkl"
+    # 上記に６時間毎にまとめた積雪計のデータを追加
+    "test_data": "/home/keiseki/JR_train_snow/20.Data/test_weather_snow.pkl"
