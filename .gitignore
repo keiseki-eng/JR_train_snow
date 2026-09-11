@@ -1,0 +1,9 @@
+# 学習用データ
+20.Data/train_data_all_with_weather.pkl
+
+# Python
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
