@@ -3,6 +3,10 @@ FEATURE:
   "FEATURE_LIST":
     [
     # '年月日',
+    '年',
+    '月',
+    '日',
+    '曜日',
     '列車番号',
     # '停車駅名',
     # 'フェンダー部分_東京方向_',
@@ -24,6 +28,7 @@ FEATURE:
 
   "CATEGORICAL_COLS":
     [
+    # '曜日',
     '列車番号',
     '金沢着雪ゼロ列車フラグ'
     ]
@@ -127,7 +132,7 @@ SNOW_CATEGORY:
 # ==========================================
 MODEL_PARAMS:
   "objective": "regression"
-  "metric": "rmse"
+  "metric": "None"
   "alpha": 0.8
   "boosting_type": "gbdt"
   "min_data_in_leaf": 50
