@@ -48,8 +48,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-path", type=str, default=str(ROOT / "submit.csv"))
     parser.add_argument("--num-boost-round", type=int, default=1000)
     parser.add_argument("--early-stopping-rounds", type=int, default=100)
-    parser.add_argument("--cv-folds", type=int, default=3)
+    parser.add_argument("--cv-folds", type=int, default=None)
     return parser.parse_args()
+
+
+def resolve_cv_folds(cv_folds: int | None, config: dict) -> int:
+    """CV fold数をCLI指定→設定ファイル順で解決する。
+
+    時系列CVでは、コマンドラインで一時的に値を変えたい場合がある一方で、
+    実験設定を YAML にまとめて管理したい場合もある。そこで、CLI が未指定なら
+    config の値を使うようにして、実験条件と実行条件を分離する。
+    """
+    if cv_folds is not None:
+        return cv_folds
+
+    cv_config = config.get("CV", {}) if isinstance(config, dict) else {}
+    value = cv_config.get("n_splits")
+    if isinstance(value, int) and value >= 2:
+        return value
+    return 3
 
 
 def evaluate_cv_folds(
@@ -141,6 +158,7 @@ def main() -> None:
     feature_columns = build_feature_columns(config)
     path_map = path_config.get("INTERIUM_PATH", path_config)
     experiment_note = config.get("EXPERIMENT", {}).get("experiment_note", "特徴量・評価の整理を実施")
+    cv_folds = resolve_cv_folds(args.cv_folds, config)
 
     logger.info("=== JR_train_snow pipeline start ===")
     logger.info(f"Experiment       : {experiment_note}")
@@ -157,7 +175,7 @@ def main() -> None:
             train_df,
             feature_columns,
             config["MODEL_PARAMS"],
-            n_splits=args.cv_folds,
+            n_splits=cv_folds,
             logger=logger,
         )
         return
@@ -211,7 +229,7 @@ def main() -> None:
             },
             ROOT / "artifacts" / "validation_report.csv",
         )
-        logger.info(f"Training result   : best_iteration={getattr(model, 'best_iteration', 'n/a')}, best_score={model.best_score_}")
+        logger.info(f"Training result   : best_iteration={getattr(model, 'best_iteration', 'n/a')}, best_score={model.best_score}")
         logger.info(f"Model saved      : {model_version_path}")
     else:
         with model_path.open("rb") as file:
