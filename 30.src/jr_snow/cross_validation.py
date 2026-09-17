@@ -1,3 +1,8 @@
+"""時系列データに対する交差検証用のFoldを作るモジュール。
+
+過去の期間を学習に使い、将来の期間を検証に使う構造で、時間順の情報漏れを防ぐ。
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -12,7 +17,12 @@ def time_series_folds(
     n_splits: int = 3,
     min_train_size: int = 1,
 ) -> list[tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]]:
-    """時系列CV用のfoldを作成する。"""
+    """時系列CV用のfoldを生成する。
+
+    1. 日付で並び替える
+    2. 日付ごとに複数の区切りを作る
+    3. 各区間をvalidationとし、残りをtrainingとして返す
+    """
     if n_splits < 2:
         raise ValueError("n_splits must be >= 2")
 
@@ -24,6 +34,7 @@ def time_series_folds(
     if len(unique_dates) < n_splits + 1:
         raise ValueError("Not enough unique dates for the requested number of folds.")
 
+    # 日付の配列を n_splits 分割して、各foldで検証日を決める。
     fold_dates = []
     chunk_size = max(1, len(unique_dates) // n_splits)
     for i in range(n_splits):

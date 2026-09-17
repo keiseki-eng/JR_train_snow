@@ -1,6 +1,9 @@
 # 学習用データ
 20.Data/*.pkl
 
+# logファイル
+logs/ *
+
 # Python
 __pycache__/
 *.pyc

@@ -1,3 +1,9 @@
+"""JR_train_snowの実行入口。
+
+このモジュールはコマンドライン引数を受け取り、学習・CV・推論・提出ファイル生成を
+一つのパイプラインとして制御する役割を持つ。
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -26,7 +32,13 @@ from jr_snow.reporting import save_validation_report
 
 
 def parse_args() -> argparse.Namespace:
+    """実行時に指定された引数を解釈して、処理モードを決める。
+
+    Returns:
+        argparse.Namespace: どの処理を実行するかを表す設定値。
+    """
     parser = argparse.ArgumentParser(description="JR_train_snow training and inference pipeline")
+    # どの工程を実行するかを選ぶ。cvは交差検証、trainは学習、predictは予測、fullは両方を実施。
     parser.add_argument("--mode", choices=["train", "predict", "full", "cv"], default="full")
     parser.add_argument("--config", type=str, default=str(ROOT / "00.config" / "config.yaml"))
     parser.add_argument("--path-config", type=str, default=str(ROOT / "00.config" / "path.yaml"))
@@ -48,6 +60,13 @@ def evaluate_cv_folds(
     logger: logging.Logger | None = None,
     target_col: str = "合計",
 ) -> dict[str, float | list[float]]:
+    """時系列CVを実行して、各foldと平均WMAEを記録する。
+
+    1. 時系列データを日付順に整列する
+    2. foldごとにtrain/validを分割する
+    3. LightGBMで学習してWMAEを算出する
+    4. すべてのfoldの結果をログに出力して平均値を返す
+    """
     if logger is None:
         logger = logging.getLogger(__name__)
 
@@ -56,6 +75,7 @@ def evaluate_cv_folds(
         working_df["年月日"] = pd.to_datetime(working_df["年月日"])
     working_df = working_df.sort_values("年月日").reset_index(drop=True)
 
+    # 追加で作成した閾値特徴量を含めて最終的な学習特徴量を組み立てる。
     feature_list = list(feature_columns.get("feature_list", []))
     engineered_cols = [
         column for column in working_df.columns if column not in feature_list and "ge_5.0_C" in column
@@ -72,6 +92,7 @@ def evaluate_cv_folds(
 
     fold_wmae: list[float] = []
     for fold_index, (X_train, X_valid, y_train, y_valid) in enumerate(folds, start=1):
+        # 各foldで学習に使うデータを必要列だけ取り出す。
         X_train = X_train[feature_list].copy()
         X_valid = X_valid[feature_list].copy()
 
@@ -106,6 +127,13 @@ def evaluate_cv_folds(
 
 
 def main() -> None:
+    """パイプラインの全体制御を行う。
+
+    1. 設定ファイルを読み込む
+    2. 学習データとテストデータを読む
+    3. 特徴量を整形する
+    4. モード別に学習、CV、予測、提出ファイル生成を実行する
+    """
     args = parse_args()
     logger = setup_logger(ROOT / "logs" / "pipeline.log")
 
@@ -119,6 +147,7 @@ def main() -> None:
     logger.info("Implementation   : feature engineering, validation, reporting, and model registry are separated into modules.")
 
     if args.mode == "cv":
+        # CV専用の処理は、学習データだけを使ってfoldごとの評価を実施する。
         train_df, _ = load_train_test_data(
             train_data_path=args.train_data or path_map.get("train_data"),
             test_data_path=args.test_data or path_map.get("test_data"),
@@ -133,6 +162,7 @@ def main() -> None:
         )
         return
 
+    # 学習・予測の共通前処理はここで行う。train/testのロードと特徴量整形をまとめて実行する。
     train_df, test_df = load_train_test_data(
         train_data_path=args.train_data or path_map.get("train_data"),
         test_data_path=args.test_data or path_map.get("test_data"),
@@ -158,6 +188,7 @@ def main() -> None:
     model_path.parent.mkdir(parents=True, exist_ok=True)
 
     if args.mode in {"train", "full"}:
+        # 学習の実行後、モデルと評価結果をアーティファクトとして保存する。
         model = train_lightgbm_model(
             prepared["X_train"],
             prepared["X_valid"],
@@ -188,6 +219,7 @@ def main() -> None:
         logger.info(f"Model loaded     : {model_path}")
 
     if args.mode in {"predict", "full"}:
+        # 推論後に提出用CSVを作成し、検証WMAEも併せてログ出力する。
         predictions = predict_submission(model, prepared["df_test_processed"], prepared["feature_list"])
         save_submission(predictions, output_path=args.output_path)
         valid_wmae = compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"]))
@@ -208,6 +240,7 @@ def main() -> None:
         )
         logger.info(f"Validation WMAE   : {valid_wmae:.6f}")
         logger.info(f"Submission saved : {args.output_path}")
+        logger.info(f"Submit model validation WMAE : {valid_wmae:.6f}")
 
 
 if __name__ == "__main__":

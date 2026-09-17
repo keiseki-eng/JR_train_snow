@@ -1,3 +1,8 @@
+"""設定ファイルと特徴量定義の基本動作を確認するテスト。
+
+YAMLから設定を読み取り、特徴量リストが生成できることを確認する。
+"""
+
 from pathlib import Path
 import sys
 
@@ -8,6 +13,7 @@ from jr_snow.config import build_feature_columns, load_yaml_config
 
 
 def test_config_and_feature_columns_are_generated():
+    """設定ファイルから特徴量定義が正しく生成されることを確認する。"""
     config = load_yaml_config(ROOT / "00.config" / "config.yaml")
     feature_columns = build_feature_columns(config)
 

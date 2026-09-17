@@ -1,3 +1,8 @@
+"""CV とログ・重要度出力を確認する回帰テスト。
+
+特徴量生成やログのタイムスタンプ付与が意図どおりに動くかを検証する。
+"""
+
 import logging
 import sys
 from pathlib import Path
@@ -14,11 +19,14 @@ from jr_snow.logging_utils import setup_logger
 
 
 class DummyModel:
+    """特徴量重要度を持つ簡易モデル。"""
+
     def __init__(self):
         self.feature_importance_ = [3, 1, 2]
 
 
 def test_time_series_folds_return_expected_count():
+    """time_series_folds が指定数のfoldを返すことを確認する。"""
     df = pd.DataFrame(
         {
             "年月日": pd.date_range("2024-01-01", periods=12, freq="D"),
@@ -33,6 +41,7 @@ def test_time_series_folds_return_expected_count():
 
 
 def test_feature_importance_csv_is_created(tmp_path: Path):
+    """重要度をCSVに保存できることを確認する。"""
     model = DummyModel()
     output_path = tmp_path / "feature_importance.csv"
 
@@ -43,6 +52,7 @@ def test_feature_importance_csv_is_created(tmp_path: Path):
 
 
 def test_setup_logger_creates_timestamped_log_and_removes_stale_fixed_log(tmp_path: Path):
+    """古い固定ログを削除し、日時付きログのみが残ることを確認する。"""
     stale_log = tmp_path / "pipeline.log"
     stale_log.write_text("legacy log content", encoding="utf-8")
 
@@ -56,6 +66,7 @@ def test_setup_logger_creates_timestamped_log_and_removes_stale_fixed_log(tmp_pa
 
 
 def test_cv_evaluation_logs_fold_metrics(caplog):
+    """CVの各fold結果と平均WMAEがログに出力されることを確認する。"""
     df = pd.DataFrame(
         {
             "年月日": pd.date_range("2024-01-01", periods=30, freq="D"),

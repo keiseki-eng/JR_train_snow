@@ -1,3 +1,8 @@
+"""通過時刻の補間と気象特徴量生成のテスト。
+
+駅の通過時刻に対して、補間や対応する気象条件の抽出が適切に動くかを確認する。
+"""
+
 import importlib.util
 from pathlib import Path
 
@@ -12,6 +17,7 @@ build_pass_time_weather_features = module.build_pass_time_weather_features
 
 
 def test_single_pass_is_midpoint():
+    """1回の通過は左右の時刻の中点で埋めることを確認する。"""
     s = pd.Series(["6:00", "通過", "6:30"])
     result = fill_pass_time_cells(s)
     expected = pd.Series(["6:00", "6:15", "6:30"])
@@ -19,6 +25,7 @@ def test_single_pass_is_midpoint():
 
 
 def test_multiple_passes_are_evenly_split():
+    """連続した通過セルは等間隔で補間されることを確認する。"""
     s = pd.Series(["6:00", "通過", "通過", "7:00"])
     result = fill_pass_time_cells(s)
     expected = pd.Series(["6:00", "6:20", "6:40", "7:00"])
@@ -26,6 +33,7 @@ def test_multiple_passes_are_evenly_split():
 
 
 def test_non_pass_values_are_preserved():
+    """通過ではない値はそのまま保持されることを確認する。"""
     s = pd.Series(["6:00", "通過", "7:00", "7:20"]) 
     result = fill_pass_time_cells(s)
     expected = pd.Series(["6:00", "6:30", "7:00", "7:20"])
@@ -33,6 +41,7 @@ def test_non_pass_values_are_preserved():
 
 
 def test_station_pass_weather_features_use_pass_hour():
+    """駅の通過時刻と同じ時間帯の気象値を対応付けることを確認する。"""
     df = pd.DataFrame(
         {
             "年月日": ["2024-01-01", "2024-01-01"],

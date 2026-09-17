@@ -1,3 +1,8 @@
+"""ログの出力形式とファイル名管理を担当するモジュール。
+
+実行ごとに別ファイルを作成したい場合や、標準出力とファイル出力を両立したい場合に使う。
+"""
+
 from __future__ import annotations
 
 import logging
@@ -6,6 +11,7 @@ from pathlib import Path
 
 
 def _build_timestamped_log_path(log_path: str | Path) -> Path:
+    """ファイル名に実行時刻を付けたログパスを作る。"""
     path = Path(log_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -16,6 +22,11 @@ def _build_timestamped_log_path(log_path: str | Path) -> Path:
 
 
 def setup_logger(log_path: str | Path | None = None) -> logging.Logger:
+    """標準出力とファイル出力を両方持つロガーを初期化する。
+
+    一度の実行ごとに異なるログファイルを作るため、古い pipeline.log を削除して
+    pipeline_YYYYMMDD_HHMMSS.log のような新しいファイルに出力する。
+    """
     logger = logging.getLogger("jr_snow")
     logger.setLevel(logging.INFO)
     logger.propagate = False

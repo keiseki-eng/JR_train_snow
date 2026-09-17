@@ -1,4 +1,8 @@
-"""JR_train_snow pipeline modules."""
+"""JR_train_snow の機械学習パイプラインを構成するモジュール群。
+
+設定読み込み、特徴量作成、CV、学習、評価、ログ出力、提出ファイル生成までの
+工程を一つのパッケージとしてまとめている。
+"""
 
 from .config import build_feature_columns, load_project_config, load_yaml_config
 from .cross_validation import time_series_folds

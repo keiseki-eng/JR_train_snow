@@ -1,3 +1,8 @@
+"""設定ファイルと特徴量定義を読み込むためのモジュール。
+
+YAMLで管理されるモデル設定から、どの列を特徴量とするかを自動生成する。
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +15,14 @@ CONFIG_DIR = PROJECT_ROOT / "00.config"
 
 
 def load_yaml_config(path: str | Path) -> dict[str, Any]:
+    """YAMLファイルを読み込んで辞書に変換する。
+
+    Args:
+        path: 設定ファイルのPathまたは文字列
+
+    Returns:
+        dict[str, Any]: YAMLの内容をそのまま辞書にした値
+    """
     config_path = Path(path)
     with config_path.open("r", encoding="utf-8") as file:
         data = yaml.safe_load(file) or {}
@@ -20,12 +33,20 @@ def load_project_config(
     config_path: str | Path | None = None,
     path_config_path: str | Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """メイン設定とファイルパス設定をまとめて読み込む。
+
+    これにより、学習条件とデータ配置を分離して管理しやすくする。
+    """
     config_root = Path(config_path) if config_path is not None else CONFIG_DIR / "config.yaml"
     path_root = Path(path_config_path) if path_config_path is not None else CONFIG_DIR / "path.yaml"
     return load_yaml_config(config_root), load_yaml_config(path_root)
 
 
 def build_feature_columns(config: dict[str, Any]) -> dict[str, list[str]]:
+    """設定ファイルから特定の命名規則で特徴量列を組み立てる。
+
+    例: 気象データや雪データを、位置・変数・時間帯の組み合わせで自動生成する。
+    """
     feature_list = list(config.get("FEATURE", {}).get("FEATURE_LIST", []))
     categorical_cols = list(config.get("FEATURE", {}).get("CATEGORICAL_COLS", []))
 
@@ -35,6 +56,7 @@ def build_feature_columns(config: dict[str, Any]) -> dict[str, list[str]]:
     hours = weather.get("hours", [])
     w_categories = config.get("WEATHER_CATEGORY", {}).get("WEATHER_CATEGORY_LIST", [])
 
+    # 例: 富山_気温_1_00, 金沢_降水量_12_00 のような特徴量を自動生成する。
     weather_feature_cols = [
         f"{location}_{variable}_{hour}"
         for location in locations
@@ -55,6 +77,7 @@ def build_feature_columns(config: dict[str, Any]) -> dict[str, list[str]]:
     snow_time_zones = snow.get("time_zones", [])
     snow_categories = config.get("SNOW_CATEGORY", {}).get("SNOW_CATEGORY_LIST", [])
 
+    # 雪データでは位置・指標・統計量・時間帯の組み合わせで列名を作る。
     snow_feature_cols = [
         f"{location}_{variable}_{statistic}_{time_zone}"
         for location in snow_locations
