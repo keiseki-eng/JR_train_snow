@@ -2,3 +2,4 @@
 2026-09-17 11:36:15,374 - INFO - Experiment       : 気温5℃以上フラグを追加
 2026-09-17 11:36:15,374 - INFO - Implementation   : feature engineering, validation, reporting, and model registry are separated into modules.
 2026-09-17 11:36:22,535 - INFO - CV fold count    : 2
+2026-09-17 11:39:25,302 - INFO - CV fold 1 WMAE   : 0.008093
