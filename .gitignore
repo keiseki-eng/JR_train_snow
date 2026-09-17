@@ -2,7 +2,7 @@
 20.Data/*.pkl
 
 # logファイル
-logs/ *
+logs/*
 
 # Python
 __pycache__/
