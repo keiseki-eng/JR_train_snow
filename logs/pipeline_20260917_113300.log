@@ -1,0 +1,7 @@
+2026-09-17 11:33:00,689 - INFO - === JR_train_snow pipeline start ===
+2026-09-17 11:33:00,689 - INFO - Experiment       : 気温5℃以上フラグを追加
+2026-09-17 11:33:00,689 - INFO - Implementation   : feature engineering, validation, reporting, and model registry are separated into modules.
+2026-09-17 11:33:05,565 - INFO - CV fold count    : 2
+2026-09-17 11:35:44,554 - INFO - CV fold 1 WMAE   : 0.008093
+2026-09-17 11:38:18,118 - INFO - CV fold 2 WMAE   : 0.000083
+2026-09-17 11:38:18,118 - INFO - CV mean WMAE     : 0.004088
