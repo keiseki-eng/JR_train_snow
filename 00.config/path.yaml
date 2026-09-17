@@ -7,10 +7,10 @@ INTERIUM_PATH:
     # "train_data": "/home/keiseki/JR_train_snow/20.Data/train_data_all_with_weather.pkl"
     # 上記に６時間毎にまとめた積雪計のデータを追加
     # "train_data": "/home/keiseki/JR_train_snow/20.Data/train_weather_snow.pkl"
-    # 11~3月の冬季のみのデータ
-    "train_data": "/home/keiseki/JR_train_snow/20.Data/train_winter_only.pkl"
+    # 1~2月の冬季のみのデータ
+    "train_data": "/home/keiseki/JR_train_snow/20.Data/train_jan_feb_only.pkl"
     # 各駅の列車通過時刻帯の気象条件を明示（冬季限定ではない）
-    "train_data": "/home/keiseki/JR_train_snow/20.Data/train_time_weather.pkl"
+    # "train_data": "/home/keiseki/JR_train_snow/20.Data/train_time_weather.pkl"
 
 
     # testデータに列車番号由来のダイヤ、金沢着雪ゼロ列車フラグを付与したもの
@@ -18,6 +18,6 @@ INTERIUM_PATH:
     # 上記に日にちごとの気象条件を加えたもの
     # "test_data": "/home/keiseki/JR_train_snow/20.Data/test_data_all_with_weather.pkl"
     # 上記に６時間毎にまとめた積雪計のデータを追加
-    "test_data": "/home/keiseki/JR_train_snow/20.Data/test_weather_snow.pkl"
+    # "test_data": "/home/keiseki/JR_train_snow/20.Data/test_weather_snow.pkl"
     # 各駅の列車通過時刻帯の気象条件を明示（冬季限定ではない）
     "test_data": "/home/keiseki/JR_train_snow/20.Data/test_time_weather.pkl"

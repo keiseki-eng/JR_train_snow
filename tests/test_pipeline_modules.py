@@ -6,6 +6,7 @@
 import logging
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -40,6 +41,27 @@ def test_time_series_folds_return_expected_count():
     assert all(len(valid) > 0 for _, valid, _, _ in folds)
 
 
+def test_time_series_folds_use_expanding_window_and_expand_training_periods():
+    """time_series_folds が train を広げていく expanding-window CV を返すことを確認する。"""
+    df = pd.DataFrame(
+        {
+            "年月日": pd.date_range("2024-01-01", periods=30, freq="D"),
+            "合計": list(range(30)),
+            "x": list(range(30)),
+        }
+    )
+
+    folds = time_series_folds(df, n_splits=3)
+
+    assert len(folds) == 3
+    train_end_dates = [train_df["年月日"].max() for train_df, _, _, _ in folds]
+    valid_start_dates = [valid_df["年月日"].min() for _, valid_df, _, _ in folds]
+    assert train_end_dates[0] < valid_start_dates[0]
+    assert train_end_dates[1] < valid_start_dates[1]
+    assert train_end_dates[2] < valid_start_dates[2]
+    assert train_end_dates[0] < train_end_dates[1] < train_end_dates[2]
+
+
 def test_feature_importance_csv_is_created(tmp_path: Path):
     """重要度をCSVに保存できることを確認する。"""
     model = DummyModel()
@@ -49,6 +71,13 @@ def test_feature_importance_csv_is_created(tmp_path: Path):
 
     assert output_path.exists()
     assert list(saved["feature"]) == ["a", "c", "b"]
+
+
+def test_parse_args_accepts_final_inference_strategy():
+    """実行時CLIで最終推論戦略を選べることを確認する。"""
+    with patch.object(sys, "argv", ["run.py", "--mode", "full", "--final-model-strategy", "cv_average"]):
+        args = run.parse_args()
+    assert args.final_model_strategy == "cv_average"
 
 
 def test_setup_logger_creates_timestamped_log_and_removes_stale_fixed_log(tmp_path: Path):
