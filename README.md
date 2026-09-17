@@ -170,16 +170,47 @@ python run.py --mode predict
 python run.py --mode cv --cv-folds 3
 ```
 
-### 6) オプションの例
+### 6) 最終推論モデル戦略の切り替え
+
+```bash
+# ① 現状の single split を使う（既存の標準動作）
+python run.py --mode full --final-model-strategy single_split
+
+# ② 各 fold モデルの平均予測を使う
+python run.py --mode full --final-model-strategy cv_average
+
+# ③ 各 fold の WMAE の中央値に最も近いモデルを採用する
+python run.py --mode full --final-model-strategy median_wmae
+
+# ④ WMAE が最もよかった fold モデルを採用する
+python run.py --mode full --final-model-strategy best_fold
+```
+
+- `single_split`: 既存の `split_date` ベースの train/valid 分割のモデルをそのまま使用
+- `cv_average`: 各 fold の学習済みモデルを使い、テスト予測を平均する
+- `median_wmae`: fold ごとの WMAE の中央値に最も近いモデルを最終推論に使う
+- `best_fold`: WMAE が最も良かった fold モデルを最終推論に使う
+
+### 7) オプションの例
 
 ```bash
 python run.py \
   --mode full \
+  --final-model-strategy cv_average \
   --num-boost-round 1000 \
   --early-stopping-rounds 100
 ```
 
-## 6. ログに残す主な情報
+## 6. CV の設計
+
+本プロジェクトの時系列CV は、従来の「固定区間の分割」ではなく、
+`train 期間を広げていく expanding-window 型` に変更しています。
+
+- 各 fold の検証期間は将来の連続区間を使う
+- 学習期間は fold が進むごとに広がる
+- これにより、過去のデータで学習し、より新しい期間を検証する構造を再現する
+
+### 7. ログに残す主な情報
 
 - Train件数
 - Validation件数
@@ -195,7 +226,7 @@ python run.py \
 
 ログは `logs/pipeline.log` に保存されます。
 
-## 7. Notebook との関係
+## 8. Notebook との関係
 
 Notebook は分析・検証のために残していますが、実行本体は `run.py` と `30.src/jr_snow` 配下へ分離しました。
 これにより、
@@ -207,7 +238,7 @@ Notebook は分析・検証のために残していますが、実行本体は `
 
 という利点があります。
 
-## 8. 今後の拡張候補
+## 9. 今後の拡張候補
 
 - Cross Validation を本格的に回す実験スクリプト
 - 学習済みモデルの比較表出力

@@ -19,9 +19,10 @@ def time_series_folds(
 ) -> list[tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]]:
     """時系列CV用のfoldを生成する。
 
-    1. 日付で並び替える
-    2. 日付ごとに複数の区切りを作る
-    3. 各区間をvalidationとし、残りをtrainingとして返す
+    ここでは "expanding-window" 形式を採用する。
+    すなわち各 fold では、検証期間の直前までのデータを学習に使い、
+    その後ろにある将来の期間を検証に使う。これにより、train 期間は
+    fold が進むにつれて広がっていく構造になる。
     """
     if n_splits < 2:
         raise ValueError("n_splits must be >= 2")
@@ -34,20 +35,23 @@ def time_series_folds(
     if len(unique_dates) < n_splits + 1:
         raise ValueError("Not enough unique dates for the requested number of folds.")
 
-    # 日付の配列を n_splits 分割して、各foldで検証日を決める。
-    fold_dates = []
-    chunk_size = max(1, len(unique_dates) // n_splits)
-    for i in range(n_splits):
-        start = i * chunk_size
-        end = len(unique_dates) if i == n_splits - 1 else (i + 1) * chunk_size
-        if end <= start:
-            continue
-        fold_dates.append(unique_dates[start:end])
+    # expanding-window CV を実現するため、検証区間をデータの後半から順に配置し、
+    # それぞれの検証開始位置より前の時点までを学習データとする。
+    boundaries = [
+        int(round(len(unique_dates) * (idx + 1) / (n_splits + 1)))
+        for idx in range(n_splits)
+    ]
 
     folds: list[tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]] = []
-    for valid_dates in fold_dates:
+    for fold_idx, valid_start in enumerate(boundaries):
+        valid_end = len(unique_dates) if fold_idx == n_splits - 1 else boundaries[fold_idx + 1]
+        if valid_end <= valid_start:
+            continue
+
+        valid_dates = unique_dates[valid_start:valid_end]
         valid_mask = working_df[split_col].isin(valid_dates)
-        train_mask = ~valid_mask
+        train_mask = working_df[split_col] < valid_dates[0]
+
         if train_mask.sum() < min_train_size or valid_mask.sum() == 0:
             continue
         X_train = working_df.loc[train_mask].drop(columns=[target_col])

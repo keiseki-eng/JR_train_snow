@@ -12,6 +12,7 @@ import pickle
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
@@ -49,6 +50,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-boost-round", type=int, default=1000)
     parser.add_argument("--early-stopping-rounds", type=int, default=100)
     parser.add_argument("--cv-folds", type=int, default=None)
+    parser.add_argument(
+        "--final-model-strategy",
+        choices=["single_split", "cv_average", "median_wmae", "best_fold"],
+        default="single_split",
+        help=(
+            "最終推論で使うモデル戦略: single_split は通常の学習/検証分割, "
+            "cv_average は各CVモデル予測の平均, median_wmae は中央値に近いモデルを選択, "
+            "best_fold はWMAE最良のfoldモデルを採用"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -69,21 +80,17 @@ def resolve_cv_folds(cv_folds: int | None, config: dict) -> int:
     return 3
 
 
-def evaluate_cv_folds(
+def run_cv_models(
     df: pd.DataFrame,
     feature_columns: dict,
     model_params: dict,
     n_splits: int = 3,
     logger: logging.Logger | None = None,
     target_col: str = "合計",
-) -> dict[str, float | list[float]]:
-    """時系列CVを実行して、各foldと平均WMAEを記録する。
-
-    1. 時系列データを日付順に整列する
-    2. foldごとにtrain/validを分割する
-    3. LightGBMで学習してWMAEを算出する
-    4. すべてのfoldの結果をログに出力して平均値を返す
-    """
+    num_boost_round: int = 200,
+    early_stopping_rounds: int = 20,
+) -> dict[str, list | float | dict]:
+    """expanding-window CV を回し、各 fold の学習済みモデルと WMAE を返す。"""
     if logger is None:
         logger = logging.getLogger(__name__)
 
@@ -92,7 +99,6 @@ def evaluate_cv_folds(
         working_df["年月日"] = pd.to_datetime(working_df["年月日"])
     working_df = working_df.sort_values("年月日").reset_index(drop=True)
 
-    # 追加で作成した閾値特徴量を含めて最終的な学習特徴量を組み立てる。
     feature_list = list(feature_columns.get("feature_list", []))
     engineered_cols = [
         column for column in working_df.columns if column not in feature_list and "ge_5.0_C" in column
@@ -104,12 +110,12 @@ def evaluate_cv_folds(
     categorical_cols = [
         column for column in feature_columns.get("categorical_cols", []) if column in feature_list
     ]
+
     folds = time_series_folds(working_df, n_splits=n_splits, target_col=target_col)
     logger.info(f"CV fold count    : {len(folds)}")
 
-    fold_wmae: list[float] = []
+    fold_results: list[dict[str, float | int | object]] = []
     for fold_index, (X_train, X_valid, y_train, y_valid) in enumerate(folds, start=1):
-        # 各foldで学習に使うデータを必要列だけ取り出す。
         X_train = X_train[feature_list].copy()
         X_valid = X_valid[feature_list].copy()
 
@@ -130,17 +136,70 @@ def evaluate_cv_folds(
             y_valid,
             categorical_cols,
             model_params,
-            num_boost_round=200,
-            early_stopping_rounds=20,
+            num_boost_round=num_boost_round,
+            early_stopping_rounds=early_stopping_rounds,
         )
         valid_pred = model.predict(X_valid)
         fold_wmae_value = compute_wmae(y_valid, valid_pred)
-        fold_wmae.append(fold_wmae_value)
+        fold_results.append({
+            "fold_index": fold_index,
+            "model": model,
+            "wmae": fold_wmae_value,
+            "valid_pred": valid_pred,
+        })
         logger.info(f"CV fold {fold_index} WMAE   : {fold_wmae_value:.6f}")
 
-    mean_wmae = sum(fold_wmae) / len(fold_wmae) if fold_wmae else 0.0
+    mean_wmae = sum(item["wmae"] for item in fold_results) / len(fold_results) if fold_results else 0.0
     logger.info(f"CV mean WMAE     : {mean_wmae:.6f}")
-    return {"fold_wmae": fold_wmae, "mean_wmae": mean_wmae}
+    return {"fold_results": fold_results, "mean_wmae": mean_wmae, "fold_wmae": [item["wmae"] for item in fold_results]}
+
+
+def evaluate_cv_folds(
+    df: pd.DataFrame,
+    feature_columns: dict,
+    model_params: dict,
+    n_splits: int = 3,
+    logger: logging.Logger | None = None,
+    target_col: str = "合計",
+) -> dict[str, float | list[float]]:
+    """時系列CVを実行して、各foldと平均WMAEを記録する。"""
+    results = run_cv_models(
+        df=df,
+        feature_columns=feature_columns,
+        model_params=model_params,
+        n_splits=n_splits,
+        logger=logger,
+        target_col=target_col,
+    )
+    return {"fold_wmae": results["fold_wmae"], "mean_wmae": results["mean_wmae"]}
+
+
+def select_model_for_final_inference(
+    cv_results: dict[str, list | float | dict],
+    strategy: str,
+) -> tuple[str, object | None, float | None]:
+    """最終推論に使うモデルを戦略に応じて選ぶ。"""
+    fold_results = cv_results.get("fold_results", [])
+    if not fold_results:
+        return strategy, None, None
+
+    if strategy == "single_split":
+        return strategy, fold_results[0]["model"], float(fold_results[0]["wmae"])
+
+    if strategy == "cv_average":
+        return strategy, None, float(cv_results["mean_wmae"])
+
+    if strategy == "median_wmae":
+        wmae_values = np.asarray([item["wmae"] for item in fold_results], dtype=float)
+        median_value = float(np.median(wmae_values))
+        selected = min(fold_results, key=lambda item: abs(float(item["wmae"]) - median_value))
+        return strategy, selected["model"], float(selected["wmae"])
+
+    if strategy == "best_fold":
+        selected = min(fold_results, key=lambda item: float(item["wmae"]))
+        return strategy, selected["model"], float(selected["wmae"])
+
+    raise ValueError(f"Unsupported final-model strategy: {strategy}")
 
 
 def main() -> None:
@@ -163,6 +222,7 @@ def main() -> None:
     logger.info("=== JR_train_snow pipeline start ===")
     logger.info(f"Experiment       : {experiment_note}")
     logger.info("Implementation   : feature engineering, validation, reporting, and model registry are separated into modules.")
+    logger.info(f"Final model strategy : {args.final_model_strategy}")
 
     if args.mode == "cv":
         # CV専用の処理は、学習データだけを使ってfoldごとの評価を実施する。
@@ -171,6 +231,9 @@ def main() -> None:
             test_data_path=args.test_data or path_map.get("test_data"),
             path_config=path_config,
         )
+        feature_list = list(feature_columns.get("feature_list", []))
+        logger.info(f"使用特徴量        : {feature_list}")
+        logger.info(f"使用特徴量(文字列): {', '.join(feature_list)}")
         evaluate_cv_folds(
             train_df,
             feature_columns,
@@ -200,37 +263,65 @@ def main() -> None:
     logger.info(f"特徴量数          : {len(prepared['feature_list'])}")
     logger.info(f"Target名         : 合計")
     logger.info(f"使用特徴量        : {prepared['feature_list']}")
+    logger.info(f"使用特徴量(文字列): {', '.join(prepared['feature_list'])}")
     logger.info(f"LightGBMパラメータ: {config['MODEL_PARAMS']}")
 
     model_path = Path(args.model_path)
     model_path.parent.mkdir(parents=True, exist_ok=True)
 
+    strategy = args.final_model_strategy
+    logger.info(f"Final model strategy : {strategy}")
+    logger.info(f"Final model strategy (CLI): {args.final_model_strategy}")
+
     if args.mode in {"train", "full"}:
-        # 学習の実行後、モデルと評価結果をアーティファクトとして保存する。
-        model = train_lightgbm_model(
-            prepared["X_train"],
-            prepared["X_valid"],
-            prepared["y_train"],
-            prepared["y_valid"],
-            prepared["categorical_cols"],
-            config["MODEL_PARAMS"],
-            num_boost_round=args.num_boost_round,
-            early_stopping_rounds=args.early_stopping_rounds,
-        )
-        model_version_path = save_model_artifact(model, ROOT / "artifacts", prefix="lightgbm_model")
-        save_feature_importance(model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
-        save_validation_report(
-            {
-                "valid_wmae": compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"])),
-                "train_rows": len(prepared["X_train"]),
-                "valid_rows": len(prepared["X_valid"]),
-                "test_rows": len(prepared["df_test_processed"]),
-                "feature_count": len(prepared["feature_list"]),
-            },
-            ROOT / "artifacts" / "validation_report.csv",
-        )
-        logger.info(f"Training result   : best_iteration={getattr(model, 'best_iteration', 'n/a')}, best_score={model.best_score}")
-        logger.info(f"Model saved      : {model_version_path}")
+        if strategy == "single_split":
+            # 通常の one-split 学習を実施し、最終推論のベースラインモデルとして保存する。
+            model = train_lightgbm_model(
+                prepared["X_train"],
+                prepared["X_valid"],
+                prepared["y_train"],
+                prepared["y_valid"],
+                prepared["categorical_cols"],
+                config["MODEL_PARAMS"],
+                num_boost_round=args.num_boost_round,
+                early_stopping_rounds=args.early_stopping_rounds,
+            )
+            model_version_path = save_model_artifact(model, ROOT / "artifacts", prefix="lightgbm_model")
+            save_feature_importance(model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
+            save_validation_report(
+                {
+                    "valid_wmae": compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"])),
+                    "train_rows": len(prepared["X_train"]),
+                    "valid_rows": len(prepared["X_valid"]),
+                    "test_rows": len(prepared["df_test_processed"]),
+                    "feature_count": len(prepared["feature_list"]),
+                    "strategy": strategy,
+                },
+                ROOT / "artifacts" / "validation_report.csv",
+            )
+            logger.info(f"Training result   : best_iteration={getattr(model, 'best_iteration', 'n/a')}, best_score={getattr(model, 'best_score', 'n/a')}")
+            logger.info(f"Model saved      : {model_version_path}")
+        else:
+            # CV ベースのモデル選択では、各 fold のモデルを評価して最終予測に使うモデル群を作る。
+            cv_results = run_cv_models(
+                train_df,
+                feature_columns,
+                config["MODEL_PARAMS"],
+                n_splits=cv_folds,
+                logger=logger,
+                target_col="合計",
+                num_boost_round=args.num_boost_round,
+                early_stopping_rounds=args.early_stopping_rounds,
+            )
+            strategy_label, selected_model, selected_wmae = select_model_for_final_inference(cv_results, strategy)
+            logger.info(f"Selected strategy result : {strategy_label}, selected_wmae={selected_wmae:.6f}")
+            if selected_model is not None:
+                model_version_path = save_model_artifact(selected_model, ROOT / "artifacts", prefix="lightgbm_model")
+                save_feature_importance(selected_model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
+                logger.info(f"Model saved      : {model_version_path}")
+                model = selected_model
+            else:
+                model = None
     else:
         with model_path.open("rb") as file:
             model = pickle.load(file)
@@ -238,9 +329,35 @@ def main() -> None:
 
     if args.mode in {"predict", "full"}:
         # 推論後に提出用CSVを作成し、検証WMAEも併せてログ出力する。
-        predictions = predict_submission(model, prepared["df_test_processed"], prepared["feature_list"])
+        if strategy == "cv_average":
+            cv_results = run_cv_models(
+                train_df,
+                feature_columns,
+                config["MODEL_PARAMS"],
+                n_splits=cv_folds,
+                logger=logger,
+                target_col="合計",
+                num_boost_round=args.num_boost_round,
+                early_stopping_rounds=args.early_stopping_rounds,
+            )
+            fold_models = [item["model"] for item in cv_results["fold_results"]]
+            test_predictions = np.mean(
+                [model.predict(prepared["df_test_processed"][prepared["feature_list"]]) for model in fold_models],
+                axis=0,
+            )
+            valid_predictions = np.mean(
+                [model.predict(prepared["X_valid"]) for model in fold_models],
+                axis=0,
+            )
+            predictions = test_predictions
+            valid_wmae = compute_wmae(prepared["y_valid"], valid_predictions)
+        else:
+            if model is None:
+                raise ValueError(f"No model is available for final inference strategy='{strategy}'")
+            predictions = predict_submission(model, prepared["df_test_processed"], prepared["feature_list"])
+            valid_wmae = compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"]))
+
         save_submission(predictions, output_path=args.output_path)
-        valid_wmae = compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"]))
         prediction_stats = summarize_prediction_stats(predictions)
         target_stats = summarize_target_stats(prepared["y_train"])
 
