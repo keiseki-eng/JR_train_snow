@@ -93,3 +93,10 @@ def test_cv_evaluation_logs_fold_metrics(caplog):
     assert len(metrics["fold_wmae"]) == 2
     assert any("CV fold 1 WMAE" in record.message for record in caplog.records)
     assert any("CV mean WMAE" in record.message for record in caplog.records)
+
+
+def test_resolve_cv_folds_prefers_cli_value_then_config():
+    """CV fold数はCLI指定を優先し、未指定時は設定ファイル値を使う。"""
+    config = {"CV": {"n_splits": 5}}
+    assert run.resolve_cv_folds(None, config) == 5
+    assert run.resolve_cv_folds(2, config) == 2
