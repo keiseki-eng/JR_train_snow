@@ -7,7 +7,14 @@
 from .config import build_feature_columns, load_project_config, load_yaml_config
 from .cross_validation import time_series_folds
 from .data import load_path_config, load_train_test_data
-from .evaluation import compute_wmae, summarize_prediction_stats, summarize_target_stats
+from .evaluation import (
+    compute_roc_auc,
+    compute_roc_curve,
+    compute_wmae,
+    plot_roc_curve,
+    summarize_prediction_stats,
+    summarize_target_stats,
+)
 from .feature_importance import save_feature_importance
 from .features import prepare_model_inputs
 from .logging_utils import setup_logger
@@ -25,6 +32,9 @@ __all__ = [
     "train_lightgbm_model",
     "wmae_eval",
     "compute_wmae",
+    "compute_roc_auc",
+    "compute_roc_curve",
+    "plot_roc_curve",
     "summarize_prediction_stats",
     "summarize_target_stats",
     "setup_logger",

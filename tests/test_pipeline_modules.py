@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 import run
 from jr_snow.cross_validation import time_series_folds
+from jr_snow.evaluation import compute_roc_auc
 from jr_snow.feature_importance import save_feature_importance
 from jr_snow.logging_utils import setup_logger
 
@@ -80,6 +82,23 @@ def test_parse_args_accepts_final_inference_strategy():
     assert args.final_model_strategy == "cv_average"
 
 
+def test_parse_args_accepts_two_stage_snow_prediction_flag():
+    """着雪量の2段階予測をCLIで有効化できることを確認する。"""
+    with patch.object(sys, "argv", ["run.py", "--mode", "predict", "--two-stage-snow-prediction"]):
+        args = run.parse_args()
+    assert args.two_stage_snow_prediction is True
+
+
+def test_apply_two_stage_snow_prediction_zeroes_non_target_rows():
+    """着雪量予測フラグが0の行は0を返し、1の行だけモデル予測を使うことを確認する。"""
+    predictions = np.array([10.0, 20.0, 30.0])
+    flags = pd.Series([0, 1, 0], name="着雪量予測フラグ")
+
+    gated = run.apply_two_stage_snow_prediction(predictions, flags)
+
+    assert gated.tolist() == [0.0, 20.0, 0.0]
+
+
 def test_setup_logger_creates_timestamped_log_and_removes_stale_fixed_log(tmp_path: Path):
     """古い固定ログを削除し、日時付きログのみが残ることを確認する。"""
     stale_log = tmp_path / "pipeline.log"
@@ -129,3 +148,13 @@ def test_resolve_cv_folds_prefers_cli_value_then_config():
     config = {"CV": {"n_splits": 5}}
     assert run.resolve_cv_folds(None, config) == 5
     assert run.resolve_cv_folds(2, config) == 2
+
+
+def test_compute_roc_auc_returns_expected_score():
+    """ROC-AUC がしきい値判定ではなく確率スコアで計算されることを確認する。"""
+    y_true = [0, 0, 1, 1]
+    y_score = [0.1, 0.4, 0.35, 0.8]
+
+    auc = compute_roc_auc(y_true, y_score)
+
+    assert auc == 0.75

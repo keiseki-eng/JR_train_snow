@@ -23,7 +23,7 @@ if str(SRC_ROOT) not in sys.path:
 from jr_snow.config import build_feature_columns, load_project_config
 from jr_snow.cross_validation import time_series_folds
 from jr_snow.data import load_train_test_data
-from jr_snow.evaluation import compute_wmae, summarize_prediction_stats, summarize_target_stats
+from jr_snow.evaluation import compute_roc_auc, compute_wmae, summarize_prediction_stats, summarize_target_stats
 from jr_snow.feature_importance import save_feature_importance
 from jr_snow.features import prepare_model_inputs
 from jr_snow.logging_utils import setup_logger
@@ -60,7 +60,34 @@ def parse_args() -> argparse.Namespace:
             "best_fold はWMAE最良のfoldモデルを採用"
         ),
     )
+    parser.add_argument(
+        "--two-stage-snow-prediction",
+        action="store_true",
+        help=(
+            "テストデータの '着雪量予測フラグ' が 0 の行は予測結果を 0 にし、"
+            "1 の行だけモデル予測を使う二段階予測を有効化する。"
+        ),
+    )
     return parser.parse_args()
+
+
+def apply_two_stage_snow_prediction(
+    predictions: np.ndarray | list[float],
+    snow_prediction_flags: pd.Series | None,
+) -> np.ndarray:
+    """着雪量予測フラグに応じて、対象外の行を 0 に置き換える。"""
+    prediction_array = np.asarray(predictions, dtype=float)
+    if snow_prediction_flags is None:
+        return prediction_array
+
+    flags = pd.to_numeric(snow_prediction_flags, errors="coerce").fillna(0).astype(int)
+    if len(flags) != len(prediction_array):
+        raise ValueError(
+            "Two-stage snow prediction requires the flag length to match prediction length: "
+            f"flags={len(flags)}, predictions={len(prediction_array)}"
+        )
+
+    return np.where(flags == 1, prediction_array, 0.0).astype(float)
 
 
 def resolve_cv_folds(cv_folds: int | None, config: dict) -> int:
@@ -141,17 +168,39 @@ def run_cv_models(
         )
         valid_pred = model.predict(X_valid)
         fold_wmae_value = compute_wmae(y_valid, valid_pred)
+        fold_roc_auc = None
+        try:
+            fold_roc_auc = compute_roc_auc(y_valid, valid_pred)
+        except ValueError:
+            pass
+
         fold_results.append({
             "fold_index": fold_index,
             "model": model,
             "wmae": fold_wmae_value,
+            "roc_auc": fold_roc_auc,
             "valid_pred": valid_pred,
         })
         logger.info(f"CV fold {fold_index} WMAE   : {fold_wmae_value:.6f}")
+        if fold_roc_auc is not None:
+            logger.info(f"CV fold {fold_index} ROC-AUC: {fold_roc_auc:.6f}")
 
     mean_wmae = sum(item["wmae"] for item in fold_results) / len(fold_results) if fold_results else 0.0
+    mean_roc_auc = (
+        sum(item["roc_auc"] for item in fold_results if item["roc_auc"] is not None) / len([item for item in fold_results if item["roc_auc"] is not None])
+        if any(item["roc_auc"] is not None for item in fold_results)
+        else None
+    )
     logger.info(f"CV mean WMAE     : {mean_wmae:.6f}")
-    return {"fold_results": fold_results, "mean_wmae": mean_wmae, "fold_wmae": [item["wmae"] for item in fold_results]}
+    if mean_roc_auc is not None:
+        logger.info(f"CV mean ROC-AUC  : {mean_roc_auc:.6f}")
+    return {
+        "fold_results": fold_results,
+        "mean_wmae": mean_wmae,
+        "mean_roc_auc": mean_roc_auc,
+        "fold_wmae": [item["wmae"] for item in fold_results],
+        "fold_roc_auc": [item["roc_auc"] for item in fold_results],
+    }
 
 
 def evaluate_cv_folds(
@@ -161,7 +210,7 @@ def evaluate_cv_folds(
     n_splits: int = 3,
     logger: logging.Logger | None = None,
     target_col: str = "合計",
-) -> dict[str, float | list[float]]:
+) -> dict[str, float | list[float] | None]:
     """時系列CVを実行して、各foldと平均WMAEを記録する。"""
     results = run_cv_models(
         df=df,
@@ -171,7 +220,12 @@ def evaluate_cv_folds(
         logger=logger,
         target_col=target_col,
     )
-    return {"fold_wmae": results["fold_wmae"], "mean_wmae": results["mean_wmae"]}
+    return {
+        "fold_wmae": results["fold_wmae"],
+        "mean_wmae": results["mean_wmae"],
+        "fold_roc_auc": results["fold_roc_auc"],
+        "mean_roc_auc": results["mean_roc_auc"],
+    }
 
 
 def select_model_for_final_inference(
@@ -356,6 +410,17 @@ def main() -> None:
                 raise ValueError(f"No model is available for final inference strategy='{strategy}'")
             predictions = predict_submission(model, prepared["df_test_processed"], prepared["feature_list"])
             valid_wmae = compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"]))
+
+        if args.two_stage_snow_prediction:
+            flag_column = prepared["df_test_processed"].get("着雪量予測フラグ")
+            if flag_column is None:
+                logger.warning(
+                    "Two-stage snow prediction was requested, but '着雪量予測フラグ' is not found in the test dataframe. "
+                    "The raw model predictions will be used without gating."
+                )
+            else:
+                predictions = apply_two_stage_snow_prediction(predictions, flag_column)
+                logger.info("Two-stage snow prediction enabled: rows with '着雪量予測フラグ'=0 are forced to 0.")
 
         save_submission(predictions, output_path=args.output_path)
         prediction_stats = summarize_prediction_stats(predictions)
