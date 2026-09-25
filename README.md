@@ -191,12 +191,26 @@ python run.py --mode full --final-model-strategy best_fold
 - `median_wmae`: fold ごとの WMAE の中央値に最も近いモデルを最終推論に使う
 - `best_fold`: WMAE が最も良かった fold モデルを最終推論に使う
 
-### 7) オプションの例
+### 7) 着雪量の2段階予測を有効化
+
+```bash
+# テストデータの「着雪量予測フラグ」が 0 の行は 0 に固定し、1 の行だけモデル予測を使う
+python run.py --mode predict --two-stage-snow-prediction
+```
+
+- `着雪量予測フラグ == 0` の行: 予測値を `0.0` に固定
+- `着雪量予測フラグ == 1` の行: モデルの予測値をそのまま利用
+- フラグ列が存在しない場合: 警告を出し、通常の単一段階予測へフォールバック
+
+この引数を使うことで、着雪あり/なしの判定を先に行い、着雪がないと判定されたレコードには着雪量を出さない2段階の処理を実行できます。
+
+### 8) オプションの例
 
 ```bash
 python run.py \
   --mode full \
   --final-model-strategy cv_average \
+  --two-stage-snow-prediction \
   --num-boost-round 1000 \
   --early-stopping-rounds 100
 ```
