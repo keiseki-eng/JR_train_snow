@@ -9,6 +9,13 @@ from typing import Any
 
 import pandas as pd
 
+from utils.utils import add_region_time_weather_features
+
+
+def add_document_weather_features(df: pd.DataFrame) -> pd.DataFrame:
+    """資料-1〜3 に基づく地域・時間帯ごとの降雪量・日射量・天気期待値を追加する。"""
+    return add_region_time_weather_features(df)
+
 
 def add_date_features(df: pd.DataFrame) -> pd.DataFrame:
     """年月日を分解して、年・月・日・曜日を追加する。"""
@@ -33,9 +40,13 @@ def add_temperature_threshold_features(df: pd.DataFrame, threshold: float = 5.0)
     return output
 
 
+
+
+
 def build_engineered_feature_frame(df: pd.DataFrame, threshold: float = 5.0) -> pd.DataFrame:
-    """日付特徴量と閾値特徴量をまとめて一つの特徴量テーブルにする。"""
+    """日付特徴量、閾値特徴量、地域・時間別の資料ベース特徴量をまとめて一つの特徴量テーブルにする。"""
     output = add_date_features(df)
+    output = add_document_weather_features(output)
     output = add_temperature_threshold_features(output, threshold=threshold)
     return output
 
