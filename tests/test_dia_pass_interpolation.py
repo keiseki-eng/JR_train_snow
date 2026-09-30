@@ -14,6 +14,7 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 fill_pass_time_cells = module.fill_pass_time_cells
 build_pass_time_weather_features = module.build_pass_time_weather_features
+add_region_time_weather_features = module.add_region_time_weather_features
 
 
 def test_single_pass_is_midpoint():
@@ -58,3 +59,30 @@ def test_station_pass_weather_features_use_pass_hour():
 
     pd.testing.assert_series_equal(result["金沢_列車通過時_気温"], pd.Series([10.0, 13.0], name="金沢_列車通過時_気温"))
     pd.testing.assert_series_equal(result["富山_列車通過時_気温"], pd.Series([20.0, 22.0], name="富山_列車通過時_気温"))
+
+
+def test_region_time_weather_features_are_added_from_document_formulas():
+    """地域と時間帯ごとの降雪量・日射量・天気期待値を生成することを確認する。"""
+    weather = pd.DataFrame(
+        {
+            "年月日時": pd.to_datetime([
+                "2024-01-01 00:00",
+                "2024-01-01 01:00",
+                "2024-01-01 00:00",
+                "2024-01-01 01:00",
+            ]),
+            "地点": ["富山", "富山", "金沢", "金沢"],
+            "気温(℃)": [0.0, 2.0, 1.0, 3.0],
+            "降水量(mm)": [10.0, 20.0, 30.0, 40.0],
+            "日照時間( 時間)": [0.0, 1.0, 0.5, 1.5],
+            "天気": [1, 2, 1, 2],
+        }
+    )
+
+    result = add_region_time_weather_features(weather)
+
+    assert "富山_降雪量_0_00" in result.columns
+    assert "富山_日射量_0_00" in result.columns
+    assert "富山_天気期待値_0_00" in result.columns
+    assert result.loc[(result["地点"] == "富山") & (result["時刻"] == 0), "富山_降雪量_0_00"].iat[0] > 0
+    assert result.loc[(result["地点"] == "富山") & (result["時刻"] == 0), "富山_日射量_0_00"].iat[0] >= 0

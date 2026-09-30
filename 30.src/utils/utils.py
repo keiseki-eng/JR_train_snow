@@ -211,6 +211,115 @@ def build_pass_time_weather_features(
     return output
 
 
+def _pick_column(columns, *candidates: str) -> str | None:
+    """候補列名の中から、存在する列を優先して返す。"""
+    for candidate in candidates:
+        if candidate in columns:
+            return candidate
+    return None
+
+
+def estimate_snowfall_amount(temperature_c, precipitation_mm):
+    """資料-1 の経験式から降雪量を推定する。
+
+    ρs = 53.6 exp(0.488 Ta) + 37.0
+    X = ρs * Y / 10000
+    ここで X は cm, Y は mm, Ta は 気温(℃) である。
+    """
+    temp = pd.to_numeric(temperature_c, errors="coerce")
+    precip = pd.to_numeric(precipitation_mm, errors="coerce")
+    snow_density = 53.6 * np.exp(0.488 * temp) + 37.0
+    snowfall = (snow_density * precip) / 10000.0
+    return snowfall.clip(lower=0.0)
+
+
+def estimate_solar_radiation_from_sunshine(sunshine_hours):
+    """資料-2 の日照率と地上日射量の関係から推定日射量を計算する。"""
+    hours = pd.to_numeric(sunshine_hours, errors="coerce").fillna(0.0)
+    ratio = hours.clip(lower=0.0, upper=1.0)
+    base = np.where(ratio > 0.0, 0.244 + 0.511 * ratio, 0.118)
+    return pd.Series(base, index=hours.index if hasattr(hours, "index") else None)
+
+
+def estimate_expected_weather_value(weather_df: pd.DataFrame, value_col: str | None = None) -> pd.DataFrame:
+    """地域 × 時刻ごとの天気の期待値を計算する。
+
+    本来は天気種別と日照時間の分布を利用するが、ここでは同一地域・同一時間帯で
+    観測した日照時間の平均値を期待値として扱う。
+    """
+    df = weather_df.copy()
+    if df.empty:
+        return df
+
+    if "年月日時" in df.columns:
+        df["時刻"] = pd.to_datetime(df["年月日時"]).dt.hour
+    elif "時刻" not in df.columns:
+        return df
+
+    if value_col is None:
+        value_col = _pick_column(df.columns, "日照時間( 時間)", "日照時間_時間_", "日照時間")
+    if value_col is None:
+        return df
+
+    expected = (
+        df.groupby(["地点", "時刻"], as_index=True)[value_col]
+        .mean()
+        .rename("天気期待値")
+        .reset_index()
+    )
+    return expected
+
+
+def add_region_time_weather_features(df: pd.DataFrame) -> pd.DataFrame:
+    """地域・時間ごとの降雪量・日射量・天気期待値を、同時刻の気象データから作成する。"""
+    output = df.copy()
+    if output.empty:
+        return output
+
+    if "地点" not in output.columns:
+        return output
+
+    if "年月日時" in output.columns:
+        output["時刻"] = pd.to_datetime(output["年月日時"]).dt.hour
+    elif "時刻" not in output.columns:
+        return output
+
+    temp_col = _pick_column(output.columns, "気温(℃)", "気温")
+    precip_col = _pick_column(output.columns, "降水量(mm)", "降水量")
+    sunshine_col = _pick_column(output.columns, "日照時間( 時間)", "日照時間_時間_", "日照時間")
+    weather_col = _pick_column(output.columns, "天気")
+    if temp_col is None or precip_col is None or sunshine_col is None:
+        return output
+
+    output["__降雪量"] = estimate_snowfall_amount(output[temp_col], output[precip_col])
+    output["__日射量"] = estimate_solar_radiation_from_sunshine(output[sunshine_col])
+
+    expected = estimate_expected_weather_value(output, value_col=sunshine_col)
+    expected_lookup = {
+        (row["地点"], int(row["時刻"])): row["天気期待値"]
+        for _, row in expected.iterrows()
+    }
+
+    for region in sorted(output["地点"].dropna().unique()):
+        for hour in sorted(output["時刻"].dropna().astype(int).unique()):
+            hour_label = f"{int(hour)}_00"
+            snowfall = output.loc[(output["地点"] == region) & (output["時刻"] == hour), "__降雪量"].mean()
+            radiation = output.loc[(output["地点"] == region) & (output["時刻"] == hour), "__日射量"].mean()
+            expectation = expected_lookup.get((region, int(hour)), np.nan)
+            output[f"{region}_降雪量_{hour_label}"] = np.where(
+                (output["地点"] == region) & (output["時刻"] == hour), snowfall, np.nan
+            )
+            output[f"{region}_日射量_{hour_label}"] = np.where(
+                (output["地点"] == region) & (output["時刻"] == hour), radiation, np.nan
+            )
+            output[f"{region}_天気期待値_{hour_label}"] = np.where(
+                (output["地点"] == region) & (output["時刻"] == hour), expectation, np.nan
+            )
+
+    output = output.drop(columns=["__降雪量", "__日射量"], errors="ignore")
+    return output
+
+
 def read_data(path: Path, **kwargs):
     """拡張子に応じてCSV/Excel/JSON/pickleを読み込む汎用関数。"""
     suffix = path.suffix.lower()

@@ -25,7 +25,7 @@ from jr_snow.cross_validation import time_series_folds
 from jr_snow.data import load_train_test_data
 from jr_snow.evaluation import compute_roc_auc, compute_wmae, summarize_prediction_stats, summarize_target_stats
 from jr_snow.feature_importance import save_feature_importance
-from jr_snow.features import prepare_model_inputs
+from jr_snow.features import add_document_weather_features, prepare_model_inputs
 from jr_snow.logging_utils import setup_logger
 from jr_snow.model_registry import save_model_artifact
 from jr_snow.modeling import predict_submission, save_submission, train_lightgbm_model
@@ -122,6 +122,7 @@ def run_cv_models(
         logger = logging.getLogger(__name__)
 
     working_df = df.copy()
+    working_df = add_document_weather_features(working_df)
     if "年月日" in working_df.columns:
         working_df["年月日"] = pd.to_datetime(working_df["年月日"])
     working_df = working_df.sort_values("年月日").reset_index(drop=True)
