@@ -1,261 +1,171 @@
 # JR_train_snow
 
-JR西日本の積雪予測ソリューションの学習・推論パイプラインです。
-Notebook は残しつつ、実行ロジックを Python モジュールへ分離して、再利用しやすい構成に整理しています。
+JR西日本の積雪予測ソリューションです。現状の構成は、
+2段階で予測する設計を意識しながら、既存コードと整合する形で運用されています。
 
-## 1. ディレクトリ構成
+- 着雪確率予測モデル: 各レコードで着雪が発生する確率を予測
+- 着雪量予測モデル: 着雪有無判定後に、着雪量を回帰で予測
 
-```text
-JR_train_snow/
-├── 00.config/
-│   ├── config.yaml          # 学習設定 / 実験メモ / LightGBM params
-│   └── path.yaml            # 入力データのパス定義
-├── 10.Notebook/
-│   ├── base_line.ipynb      # 既存の分析 Notebook
-│   ├── データの前処理.ipynb
-│   ├── 基礎分析.ipynb
-│   └── submit.csv
-├── 20.Data/
-│   ├── train_*.pkl          # 学習データ
-│   ├── test_*.pkl           # 推論用データ
-│   ├── weather.csv          # 気象データ
-│   ├── snowfall.csv         # 積雪計データ
-│   └── ...
-├── 30.src/
-│   ├── jr_snow/
-│   │   ├── config.py         # 設定ファイル読み込みと特徴量定義
-│   │   ├── data.py           # データ読込
-│   │   ├── features.py       # 前処理と特徴量強化
-│   │   ├── cross_validation.py  # 時系列CV
-│   │   ├── feature_importance.py  # 特徴量重要度保存
-│   │   ├── model_registry.py # モデルの保存・読み込み
-│   │   ├── modeling.py       # LightGBM 学習・推論
-│   │   ├── evaluation.py     # WMAE 等の評価指標
-│   │   ├── reporting.py      # 評価レポートCSV出力
-│   │   ├── logging_utils.py  # log.info 用ロガー
-│   │   └── __init__.py
-│   └── utils/
-│       ├── utils.py
-│       └── validation.py
-├── artifacts/
-│   ├── lightgbm_model_*.pkl
-│   ├── feature_importance.csv
-│   └── validation_report.csv
-├── logs/
-│   └── pipeline.log
-├── tests/
-│   ├── test_run_pipeline.py
-│   ├── test_dia_pass_interpolation.py
-│   └── test_pipeline_modules.py
-├── run.py
-├── submit.csv
-├── .venv/
-├── pytest.ini (if present)
-├── README.md
-└── requirements.txt (if added later)
-```
-
-## 2. 実行フロー
+## 1. 2段階のモデル構成
 
 ```text
-Raw data in 20.Data
-    ↓
-config.py / path.yaml
-    ↓
-load_train_test_data()
-    ↓
-features.py
-  - 日付特徴量
-  - 気温閾値フラグ
-  - 既存特徴量の再整形
-    ↓
-train/valid split
-    ↓
-modeling.py
-  - LightGBM training
-  - inference
-    ↓
-feature_importance.py
-model_registry.py
-reporting.py
-    ↓
-logs/pipeline.log
-artifacts/*
-submit.csv
+入力データ
+  ↓
+着雪確率予測モデル（binary classification）
+  ↓
+着雪有無の判定（config の thresholds を利用）
+  ↓
+着雪量予測モデル（regression）
+  ↓
+着雪量の予測
 ```
 
-### 役割分担
+このプロジェクトでは、既存の `run.py` と `binary_predict_run.py` を分けて管理し、
+実験 Notebook と実行用 Python スクリプトを両立させています。
 
-- data.py
-  - 学習データとテストデータの読み込み
-- features.py
-  - 前処理と特徴量生成
-- cross_validation.py
-  - 時系列 CV フォールド生成
-- feature_importance.py
-  - 特徴量重要度 CSV を出力
-- model_registry.py
-  - 学習済みモデルを版管理付きで保存・読み込み
-- modeling.py
-  - LightGBM の学習と推論
-- evaluation.py
-  - WMAE 等の計算
-- reporting.py
-  - 評価レポートを CSV に保存
-- logging_utils.py
-  - 実験メモや学習指標を log.info で出力
+## 2. 主要ファイル
 
-## 3. 入力ディレクトリの整理
+- `run.py` : 着雪量予測モデルの学習・推論・提出ファイル生成
+- `binary_predict_run.py` : 着雪確率予測モデルを Notebook と同等の処理で実行
+- `00.config/config.yaml` : モデル設定、thresholds、LightGBM param を管理
+- `00.config/path.yaml` : 学習・テストデータのロード先を管理
+- `30.src/jr_snow/` : 前処理、特徴量生成、CV、評価、保存処理
+- `10.Notebook/binary_base_line.ipynb` : 着雪確率モデルの元実験 Notebook
 
-### 00.config
-- `config.yaml`
-  - `EXPERIMENT.experiment_note`
-  - `MODEL_PARAMS`
-  - `FEATURE`
-  - `WEATHER_FEATURE`
-  - `SNOW_FEATURE`
-- `path.yaml`
-  - `INTERIUM_PATH.train_data`
-  - `INTERIUM_PATH.test_data`
+## 3. 着雪確率予測モデル
 
-### 20.Data
-- 事前に生成済みの学習・検証用データを置くディレクトリ
-- 例:
-  - `train_time_weather.pkl`
-  - `test_time_weather.pkl`
+### 目的
+各レコードについて、「着雪が発生する確率」を予測します。
 
-## 4. 出力ディレクトリの整理
+### 使用データ
+- `train_data` / `test_data` は `00.config/path.yaml` の設定に従って読み込む
+- 既存 Notebook のロジックに合わせて、`着雪有無フラグ` をターゲットとして学習する
+- 時系列 split は `binary_split_date` で維持する
 
-### artifacts/
-- 学習済みモデルの保存先
-- 特徴量重要度CSV
-- validation report CSV
-
-### logs/
-- `pipeline.log`
-- 学習件数、使用特徴量、LightGBMパラメータ、予測値統計量などを記録
-
-### submit.csv
-- 推論結果の提出用ファイル
-
-## 5. 実行方法
-
-### 1) 仮想環境を有効化
+### 実行方法
 
 ```bash
 source .venv/bin/activate
+python binary_predict_run.py
 ```
 
-### 2) 学習 + 推論を実行
+### 処理内容
+- データ読込
+- 特徴量生成
+- train/validation 分割
+- LightGBM binary classification
+- ROC-AUC 評価
+- モデル保存
+- 予測確率の出力
+
+### 出力
+- `artifacts/binary_model_*.pkl`
+- `artifacts/binary_prediction_probabilities.csv`
+
+## 4. 着雪量予測モデル
+
+### 目的
+着雪が発生すると判定されたレコードに対して、着雪量を回帰予測します。
+
+### 重要な要件
+今回の修正では、`thresholds` 以上のレコードのみを学習・validation の対象に使用します。
+
+具体的には、`着雪有無フラグ` または `着雪確率` が `thresholds` 以上の行だけを残し、
+その後に従来通りの時系列 split を適用します。
+
+```python
+# 概念
+filtered_df = df[df["着雪有無フラグ"] >= thresholds]
+```
+
+- `thresholds` は `00.config/config.yaml` で管理する
+- `test_data` は今回の要件で勝手に除外しない
+- train/validation で同じフィルタ条件が適用される
+- 時系列 split のロジックそのものは変更しない
+
+### 実行方法
 
 ```bash
+source .venv/bin/activate
 python run.py --mode full
 ```
 
-### 3) 学習のみ
-
-```bash
-python run.py --mode train
-```
-
-### 4) 推論のみ
+または、推論のみ:
 
 ```bash
 python run.py --mode predict
 ```
 
-### 5) 時系列CVの確認
+### 出力
+- `submit.csv`
+- `artifacts/lightgbm_model_*.pkl`
+- `artifacts/feature_importance.csv`
+- `artifacts/validation_report.csv`
+- `logs/pipeline.log`
+
+## 5. 既存コードとの整合性
+
+- 学習・validation の時系列分割はそのまま維持
+- LightGBM のハイパーパラメータ、評価指標、特徴量生成の流れは維持
+- 不要な大規模な仕様変更は行わず、既存モジュールを再利用する
+- 追加した threshold フィルタは `run.py` の学習前処理で実施
+
+## 6. 実行例
+
+### 学習 + 推論（着雪量モデル）
+
+```bash
+python run.py --mode full
+```
+
+### 学習のみ
+
+```bash
+python run.py --mode train
+```
+
+### 推論のみ
+
+```bash
+python run.py --mode predict
+```
+
+### CV 確認
 
 ```bash
 python run.py --mode cv --cv-folds 3
 ```
 
-### 6) 最終推論モデル戦略の切り替え
+### 2段階予測の適用
 
 ```bash
-# ① 現状の single split を使う（既存の標準動作）
-python run.py --mode full --final-model-strategy single_split
-
-# ② 各 fold モデルの平均予測を使う
-python run.py --mode full --final-model-strategy cv_average
-
-# ③ 各 fold の WMAE の中央値に最も近いモデルを採用する
-python run.py --mode full --final-model-strategy median_wmae
-
-# ④ WMAE が最もよかった fold モデルを採用する
-python run.py --mode full --final-model-strategy best_fold
-```
-
-- `single_split`: 既存の `split_date` ベースの train/valid 分割のモデルをそのまま使用
-- `cv_average`: 各 fold の学習済みモデルを使い、テスト予測を平均する
-- `median_wmae`: fold ごとの WMAE の中央値に最も近いモデルを最終推論に使う
-- `best_fold`: WMAE が最も良かった fold モデルを最終推論に使う
-
-### 7) 着雪量の2段階予測を有効化
-
-```bash
-# テストデータの「着雪量予測フラグ」が 0 の行は 0 に固定し、1 の行だけモデル予測を使う
 python run.py --mode predict --two-stage-snow-prediction
 ```
 
-- `着雪量予測フラグ == 0` の行: 予測値を `0.0` に固定
-- `着雪量予測フラグ == 1` の行: モデルの予測値をそのまま利用
-- フラグ列が存在しない場合: 警告を出し、通常の単一段階予測へフォールバック
-
-この引数を使うことで、着雪あり/なしの判定を先に行い、着雪がないと判定されたレコードには着雪量を出さない2段階の処理を実行できます。
-
-### 8) オプションの例
+### 確率予測モデル
 
 ```bash
-python run.py \
-  --mode full \
-  --final-model-strategy cv_average \
-  --two-stage-snow-prediction \
-  --num-boost-round 1000 \
-  --early-stopping-rounds 100
+python binary_predict_run.py
 ```
 
-## 6. CV の設計
+## 7. config の重要項目
 
-本プロジェクトの時系列CV は、従来の「固定区間の分割」ではなく、
-`train 期間を広げていく expanding-window 型` に変更しています。
+### `00.config/config.yaml`
 
-- 各 fold の検証期間は将来の連続区間を使う
-- 学習期間は fold が進むごとに広がる
-- これにより、過去のデータで学習し、より新しい期間を検証する構造を再現する
+- `binary_split_date`: 着雪確率モデルの時系列 split 日
+- `thresholds`: 着雪有無判定の閾値（0.005 など）
+- `MODEL_PARAMS`: 着雪量回帰モデル用 LightGBM パラメータ
+- `BINARY_MODEL_PARAMS`: 着雪確率分類モデル用 LightGBM パラメータ
 
-### 7. ログに残す主な情報
+### `00.config/path.yaml`
 
-- Train件数
-- Validation件数
-- Test件数
-- 特徴量数
-- Target名
-- 使用特徴量
-- LightGBMパラメータ
-- 学習結果
-- Prediction stats
-- Target stats
-- Experiment note
+- `INTERIUM_PATH.train_data`
+- `INTERIUM_PATH.test_data`
 
-ログは `logs/pipeline.log` に保存されます。
+## 8. 補足
 
-## 8. Notebook との関係
+- Notebook は分析・検証用に残している
+- 実行本体は Python ロジックとして管理し、再現性を高めている
+- 新たな仕様を勝手に追加せず、既存のコードから読み取れる範囲で実装している
 
-Notebook は分析・検証のために残していますが、実行本体は `run.py` と `30.src/jr_snow` 配下へ分離しました。
-これにより、
-
-- 実験の再現性が上がる
-- モジュールごとにテストがしやすい
-- 学習・推論・評価の責務が明確になる
-- 提出前の整理がしやすい
-
-という利点があります。
-
-## 9. 今後の拡張候補
-
-- Cross Validation を本格的に回す実験スクリプト
-- 学習済みモデルの比較表出力
-- feature importance の可視化図
-- バージョン別のモデル管理と回帰テスト
 - 実験条件ごとの設定ファイル切り替え

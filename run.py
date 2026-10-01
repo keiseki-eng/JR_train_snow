@@ -71,6 +71,29 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def filter_snow_presence_records(
+    df: pd.DataFrame,
+    thresholds: float | int = 0.0,
+    candidate_columns: tuple[str, ...] = ("着雪有無フラグ", "着雪有無", "着雪確率"),
+) -> pd.DataFrame:
+    """着雪が一定以上あるレコードのみを残す。
+
+    既存の二段階モデルの意図に合わせて、train/valid の対象レコードを絞る。
+    test の場合はこの関数で勝手にフィルタしないため、予測対象の拡張は行わない。
+    """
+    if df.empty:
+        return df.copy()
+
+    threshold_value = float(thresholds)
+    for column in candidate_columns:
+        if column not in df.columns:
+            continue
+        filtered = df.loc[pd.to_numeric(df[column], errors="coerce") >= threshold_value].copy()
+        return filtered
+
+    return df.copy()
+
+
 def apply_two_stage_snow_prediction(
     predictions: np.ndarray | list[float],
     snow_prediction_flags: pd.Series | None,
@@ -304,6 +327,17 @@ def main() -> None:
         test_data_path=args.test_data or path_map.get("test_data"),
         path_config=path_config,
     )
+
+    thresholds = float(config.get("thresholds", 0.0))
+    train_before_rows = len(train_df)
+    if any(column in train_df.columns for column in ("着雪有無フラグ", "着雪有無", "着雪確率")):
+        train_df = filter_snow_presence_records(train_df, thresholds=thresholds)
+        logger.info(
+            "Snow presence filter: thresholds=%s, train rows %d -> %d",
+            thresholds,
+            train_before_rows,
+            len(train_df),
+        )
 
     prepared = prepare_model_inputs(
         df_train=train_df,

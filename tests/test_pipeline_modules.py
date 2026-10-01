@@ -158,3 +158,35 @@ def test_compute_roc_auc_returns_expected_score():
     auc = compute_roc_auc(y_true, y_score)
 
     assert auc == 0.75
+
+
+def test_filter_snow_presence_records_uses_threshold_for_binary_flag():
+    """着雪有無フラグがしきい値以上の行だけを残すことを確認する。"""
+    df = pd.DataFrame(
+        {
+            "年月日": pd.date_range("2024-01-01", periods=5, freq="D"),
+            "着雪有無フラグ": [0, 1, 0, 1, 0],
+            "合計": [0.0, 1.0, 0.0, 2.0, 0.0],
+        }
+    )
+
+    filtered = run.filter_snow_presence_records(df, thresholds=0.005)
+
+    assert len(filtered) == 2
+    assert filtered["着雪有無フラグ"].tolist() == [1, 1]
+
+
+def test_filter_snow_presence_records_uses_probability_column_when_present():
+    """着雪確率カラムがある場合は、確率値に対してしきい値フィルタが効くことを確認する。"""
+    df = pd.DataFrame(
+        {
+            "年月日": pd.date_range("2024-01-01", periods=4, freq="D"),
+            "着雪確率": [0.001, 0.005, 0.02, 0.0],
+            "合計": [0.1, 0.2, 0.5, 0.0],
+        }
+    )
+
+    filtered = run.filter_snow_presence_records(df, thresholds=0.005)
+
+    assert len(filtered) == 2
+    assert filtered["着雪確率"].tolist() == [0.005, 0.02]
