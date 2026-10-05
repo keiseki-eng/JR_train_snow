@@ -24,7 +24,7 @@ from jr_snow.config import build_feature_columns, load_project_config
 from jr_snow.cross_validation import time_series_folds
 from jr_snow.data import load_train_test_data
 from jr_snow.evaluation import compute_roc_auc, compute_wmae, summarize_prediction_stats, summarize_target_stats
-from jr_snow.feature_importance import save_feature_importance
+from jr_snow.feature_importance import save_feature_importance, save_shap_summary_plot
 from jr_snow.features import add_document_weather_features, prepare_model_inputs
 from jr_snow.logging_utils import setup_logger
 from jr_snow.model_registry import save_model_artifact
@@ -377,6 +377,7 @@ def main() -> None:
             )
             model_version_path = save_model_artifact(model, ROOT / "artifacts", prefix="lightgbm_model")
             save_feature_importance(model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
+            save_shap_summary_plot(model, prepared["X_valid"], ROOT / "artifacts" / "shap")
             save_validation_report(
                 {
                     "valid_wmae": compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"])),
@@ -407,6 +408,7 @@ def main() -> None:
             if selected_model is not None:
                 model_version_path = save_model_artifact(selected_model, ROOT / "artifacts", prefix="lightgbm_model")
                 save_feature_importance(selected_model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
+                save_shap_summary_plot(selected_model, prepared["X_valid"], ROOT / "artifacts" / "shap")
                 logger.info(f"Model saved      : {model_version_path}")
                 model = selected_model
             else:

@@ -15,7 +15,7 @@ from .evaluation import (
     summarize_prediction_stats,
     summarize_target_stats,
 )
-from .feature_importance import save_feature_importance
+from .feature_importance import save_feature_importance, save_shap_summary_plot
 from .features import prepare_model_inputs
 from .logging_utils import setup_logger
 from .model_registry import build_model_version, load_model_artifact, save_model_artifact
@@ -40,6 +40,7 @@ __all__ = [
     "setup_logger",
     "time_series_folds",
     "save_feature_importance",
+    "save_shap_summary_plot",
     "save_model_artifact",
     "load_model_artifact",
     "build_model_version",

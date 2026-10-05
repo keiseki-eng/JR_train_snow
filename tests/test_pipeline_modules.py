@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 import run
 from jr_snow.cross_validation import time_series_folds
 from jr_snow.evaluation import compute_roc_auc
-from jr_snow.feature_importance import save_feature_importance
+from jr_snow.feature_importance import save_feature_importance, save_shap_summary_plot
 from jr_snow.logging_utils import setup_logger
 
 
@@ -73,6 +73,34 @@ def test_feature_importance_csv_is_created(tmp_path: Path):
 
     assert output_path.exists()
     assert list(saved["feature"]) == ["a", "c", "b"]
+
+
+def test_save_shap_summary_plot_creates_images(tmp_path: Path):
+    """SHAPの要約図を画像として保存できることを確認する。"""
+    class DummyTreeModel:
+        def __init__(self):
+            self.n_features_in_ = 3
+
+    import shap
+
+    class DummyExplainer:
+        def __init__(self, model, data):
+            self.model = model
+            self.data = data
+
+        def shap_values(self, X):
+            values = np.zeros((len(X), X.shape[1]))
+            return values
+
+    with patch("jr_snow.feature_importance.shap.TreeExplainer", return_value=DummyExplainer(None, None)):
+        X = pd.DataFrame([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], columns=["a", "b", "c"])
+        output_dir = tmp_path / "shap"
+
+        paths = save_shap_summary_plot(DummyTreeModel(), X, output_dir)
+
+    assert output_dir.joinpath("shap_summary.png").exists()
+    assert output_dir.joinpath("shap_waterfall_0.png").exists()
+    assert len(paths) == 2
 
 
 def test_parse_args_accepts_final_inference_strategy():
