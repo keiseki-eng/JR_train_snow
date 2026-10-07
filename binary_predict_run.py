@@ -50,6 +50,9 @@ def prepare_binary_model_data(
     feature_list = list(feature_columns.get("feature_list", []))
     categorical_cols = list(feature_columns.get("categorical_cols", []))
 
+    if "冬季フラグ" in df_train.columns:
+        df_train = df_train.loc[pd.to_numeric(df_train["冬季フラグ"], errors="coerce") == 1].copy()
+
     df_train = build_engineered_feature_frame(df_train)
     df_test = build_engineered_feature_frame(df_test)
 
@@ -153,6 +156,9 @@ def main() -> None:
     print(f"Model saved: {model_path}")
 
     probabilities = model.predict(df_test_processed)
+    if "冬季フラグ" in test_df.columns:
+        winter_flags = pd.to_numeric(test_df["冬季フラグ"], errors="coerce")
+        probabilities = np.where(winter_flags.to_numpy() == 1, probabilities, 0.0)
     probability_df = pd.DataFrame({"着雪確率": probabilities})
     output_path = Path(args.prediction_output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

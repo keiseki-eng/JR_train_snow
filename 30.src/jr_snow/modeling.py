@@ -76,6 +76,12 @@ def predict_submission(model: Any, df_test: pd.DataFrame, feature_list: list[str
     prediction_df = df_test.reindex(columns=feature_list)
     return model.predict(prediction_df)
 
+def apply_prediction_correction(predictions: np.ndarray, correction_amount: float) -> np.ndarray:
+    predictions = np.asarray(predictions, dtype=float)
+    mask = predictions > 0
+    predictions[mask] += correction_amount
+    return predictions
+
 
 def save_submission(predictions: np.ndarray, output_path: str | Path = "submit.csv") -> pd.DataFrame:
     """予測結果をCSVとして保存する。

@@ -28,8 +28,9 @@ from jr_snow.feature_importance import save_feature_importance, save_shap_summar
 from jr_snow.features import add_document_weather_features, prepare_model_inputs
 from jr_snow.logging_utils import setup_logger
 from jr_snow.model_registry import save_model_artifact
-from jr_snow.modeling import predict_submission, save_submission, train_lightgbm_model
+from jr_snow.modeling import predict_submission, save_submission, train_lightgbm_model, apply_prediction_correction
 from jr_snow.reporting import save_validation_report
+
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,30 +76,37 @@ def filter_snow_presence_records(
     df: pd.DataFrame,
     thresholds: float | int = 0.0,
     candidate_columns: tuple[str, ...] = ("着雪有無フラグ", "着雪有無", "着雪確率"),
+    winter_flag_column: str = "冬季フラグ",
 ) -> pd.DataFrame:
-    """着雪が一定以上あるレコードのみを残す。
+    """冬季レコードに限定したうえで、着雪確率が閾値以上の行だけを残す。
 
-    既存の二段階モデルの意図に合わせて、train/valid の対象レコードを絞る。
-    test の場合はこの関数で勝手にフィルタしないため、予測対象の拡張は行わない。
+    学習時に冬季外のデータを混ぜないようにし、着雪量モデルは冬季かつ
+    着雪確率が threshold 以上のレコードにのみ当てはめる。
     """
     if df.empty:
         return df.copy()
 
+    filtered = df.copy()
+    if winter_flag_column in filtered.columns:
+        filtered = filtered.loc[pd.to_numeric(filtered[winter_flag_column], errors="coerce") == 1].copy()
+
     threshold_value = float(thresholds)
     for column in candidate_columns:
-        if column not in df.columns:
+        if column not in filtered.columns:
             continue
-        filtered = df.loc[pd.to_numeric(df[column], errors="coerce") >= threshold_value].copy()
+        filtered = filtered.loc[pd.to_numeric(filtered[column], errors="coerce") >= threshold_value].copy()
         return filtered
 
-    return df.copy()
+    return filtered
 
 
 def apply_two_stage_snow_prediction(
     predictions: np.ndarray | list[float],
     snow_prediction_flags: pd.Series | None,
+    snow_probabilities: pd.Series | None = None,
+    thresholds: float | int = 0.0,
 ) -> np.ndarray:
-    """着雪量予測フラグに応じて、対象外の行を 0 に置き換える。"""
+    """冬季フラグと着雪確率の両方を考慮して、対象外の行を 0 に置き換える。"""
     prediction_array = np.asarray(predictions, dtype=float)
     if snow_prediction_flags is None:
         return prediction_array
@@ -110,7 +118,20 @@ def apply_two_stage_snow_prediction(
             f"flags={len(flags)}, predictions={len(prediction_array)}"
         )
 
-    return np.where(flags == 1, prediction_array, 0.0).astype(float)
+    gated_predictions = np.where(flags == 1, prediction_array, 0.0).astype(float)
+    if snow_probabilities is None:
+        return gated_predictions
+
+    probabilities = pd.to_numeric(snow_probabilities, errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    if len(probabilities) != len(prediction_array):
+        raise ValueError(
+            "Two-stage snow prediction requires the probability length to match prediction length: "
+            f"probabilities={len(probabilities)}, predictions={len(prediction_array)}"
+        )
+
+    threshold_value = float(thresholds)
+    valid_mask = (flags == 1) & (probabilities >= threshold_value)
+    return np.where(valid_mask, prediction_array, 0.0).astype(float)
 
 
 def resolve_cv_folds(cv_folds: int | None, config: dict) -> int:
@@ -330,7 +351,7 @@ def main() -> None:
 
     thresholds = float(config.get("thresholds", 0.0))
     train_before_rows = len(train_df)
-    if any(column in train_df.columns for column in ("着雪有無フラグ", "着雪有無", "着雪確率")):
+    if any(column in train_df.columns for column in ("冬季フラグ", "着雪有無フラグ", "着雪有無", "着雪確率")):
         train_df = filter_snow_presence_records(train_df, thresholds=thresholds)
         logger.info(
             "Snow presence filter: thresholds=%s, train rows %d -> %d",
@@ -441,23 +462,39 @@ def main() -> None:
                 axis=0,
             )
             predictions = test_predictions
+            predictions = apply_prediction_correction(predictions, config.get("correction_amount", 0.0))
             valid_wmae = compute_wmae(prepared["y_valid"], valid_predictions)
         else:
             if model is None:
                 raise ValueError(f"No model is available for final inference strategy='{strategy}'")
             predictions = predict_submission(model, prepared["df_test_processed"], prepared["feature_list"])
+            predictions = apply_prediction_correction(predictions, config.get("correction_amount", 0.0))
             valid_wmae = compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"]))
 
         if args.two_stage_snow_prediction:
+            winter_flag_column = prepared["df_test_processed"].get("冬季フラグ")
             flag_column = prepared["df_test_processed"].get("着雪量予測フラグ")
-            if flag_column is None:
-                logger.warning(
-                    "Two-stage snow prediction was requested, but '着雪量予測フラグ' is not found in the test dataframe. "
-                    "The raw model predictions will be used without gating."
+            probability_column = prepared["df_test_processed"].get("着雪確率")
+
+            if winter_flag_column is not None:
+                predictions = apply_two_stage_snow_prediction(
+                    predictions,
+                    winter_flag_column,
+                    snow_probabilities=probability_column,
+                    thresholds=thresholds,
                 )
-            else:
+                logger.info(
+                    "Two-stage snow prediction enabled: rows with '冬季フラグ'=0 are forced to 0 and "
+                    "probabilities below threshold are filtered."
+                )
+            elif flag_column is not None:
                 predictions = apply_two_stage_snow_prediction(predictions, flag_column)
                 logger.info("Two-stage snow prediction enabled: rows with '着雪量予測フラグ'=0 are forced to 0.")
+            else:
+                logger.warning(
+                    "Two-stage snow prediction was requested, but neither '冬季フラグ' nor '着雪量予測フラグ' is found in the test dataframe. "
+                    "The raw model predictions will be used without gating."
+                )
 
         save_submission(predictions, output_path=args.output_path)
         prediction_stats = summarize_prediction_stats(predictions)

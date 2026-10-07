@@ -321,11 +321,30 @@ def add_region_time_weather_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def read_data(path: Path, **kwargs):
-    """拡張子に応じてCSV/Excel/JSON/pickleを読み込む汎用関数。"""
+    """拡張子に応じてCSV/Excel/JSON/pickleを読み込む汎用関数。
+
+    日本語を含む CSV は UTF-8 ではなく CP932/Shift_JIS で保存されることが多く、
+    そのまま UTF-8 と仮定すると文字化けする。ここでは候補を順に試して最初に
+    成功したエンコーディングで読み込むようにする。
+    """
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        kwargs.setdefault("encoding", "utf-8")
-        kwargs.setdefault("dtype", "str")
+        encoding = kwargs.pop("encoding", None)
+        candidates = [encoding] if encoding else ["utf-8-sig", "utf-8", "cp932", "shift_jis", "euc_jp"]
+        last_error = None
+
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                kwargs.setdefault("dtype", "str")
+                return pd.read_csv(path, encoding=candidate, **kwargs)
+            except (UnicodeDecodeError, UnicodeError, ValueError) as exc:
+                last_error = exc
+                continue
+
+        if last_error is not None:
+            raise last_error
         return pd.read_csv(path, **kwargs)
     elif suffix in [".xls", ".xlsx"]:
         return pd.read_excel(path, **kwargs)

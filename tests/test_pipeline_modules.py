@@ -218,3 +218,36 @@ def test_filter_snow_presence_records_uses_probability_column_when_present():
 
     assert len(filtered) == 2
     assert filtered["着雪確率"].tolist() == [0.005, 0.02]
+
+
+def test_filter_snow_presence_records_requires_winter_flag_before_thresholding():
+    """冬季フラグが存在する場合は、冬季レコードに限定してからしきい値を適用する。"""
+    df = pd.DataFrame(
+        {
+            "年月日": pd.date_range("2024-01-01", periods=5, freq="D"),
+            "冬季フラグ": [0, 1, 1, 1, 0],
+            "着雪確率": [0.9, 0.001, 0.02, 0.03, 0.8],
+            "合計": [0.0, 0.1, 0.2, 0.3, 0.4],
+        }
+    )
+
+    filtered = run.filter_snow_presence_records(df, thresholds=0.005)
+
+    assert filtered["冬季フラグ"].tolist() == [1, 1]
+    assert filtered["着雪確率"].tolist() == [0.02, 0.03]
+
+
+def test_apply_two_stage_snow_prediction_uses_winter_flag_and_probability_threshold():
+    """冬季外の行は0、冬季内でも確率閾値未満は0とする。"""
+    predictions = np.array([10.0, 20.0, 30.0, 40.0])
+    winter_flags = pd.Series([0, 1, 1, 0], name="冬季フラグ")
+    snow_probabilities = pd.Series([0.9, 0.9, 0.1, 0.9], name="着雪確率")
+
+    gated = run.apply_two_stage_snow_prediction(
+        predictions,
+        winter_flags,
+        snow_probabilities=snow_probabilities,
+        thresholds=0.5,
+    )
+
+    assert gated.tolist() == [0.0, 20.0, 0.0, 0.0]
