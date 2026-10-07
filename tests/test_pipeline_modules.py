@@ -18,6 +18,7 @@ import run
 from jr_snow.cross_validation import time_series_folds
 from jr_snow.evaluation import compute_roc_auc
 from jr_snow.feature_importance import save_feature_importance, save_shap_summary_plot
+from jr_snow.features import fill_missing_by_same_day_time_location_average
 from jr_snow.logging_utils import setup_logger
 
 
@@ -125,6 +126,17 @@ def test_apply_two_stage_snow_prediction_zeroes_non_target_rows():
     gated = run.apply_two_stage_snow_prediction(predictions, flags)
 
     assert gated.tolist() == [0.0, 20.0, 0.0]
+
+
+def test_save_submission_uses_single_prediction_column_without_index(tmp_path: Path):
+    """提出用CSVはインデックス列を含めず、1列だけの予測値を保存することを確認する。"""
+    output_path = tmp_path / "submit.csv"
+
+    saved = run.save_submission(np.array([0.1, 0.2, 0.3]), output_path)
+
+    assert saved.shape == (3, 1)
+    assert saved.iloc[:, 0].tolist() == [0.1, 0.2, 0.3]
+    assert output_path.read_text(encoding="utf-8").splitlines() == ["0.1", "0.2", "0.3"]
 
 
 def test_setup_logger_creates_timestamped_log_and_removes_stale_fixed_log(tmp_path: Path):
@@ -235,6 +247,68 @@ def test_filter_snow_presence_records_requires_winter_flag_before_thresholding()
 
     assert filtered["冬季フラグ"].tolist() == [1, 1]
     assert filtered["着雪確率"].tolist() == [0.02, 0.03]
+
+
+def test_fill_missing_by_same_day_time_location_average_uses_other_locations_for_wide_weather_columns():
+    """広い気象列フォーマットでは、同じ日・同じ時間帯の他地点平均で欠損を補完する。"""
+    df = pd.DataFrame(
+        {
+            "年月日": [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-01")],
+            "列車番号": [1, 2],
+            "富山_気温_℃__1_00": [10.0, np.nan],
+            "糸魚川_気温_℃__1_00": [12.0, 12.0],
+            "金沢_気温_℃__1_00": [11.0, 11.0],
+            "富山_降水量_mm__1_00": [1.0, 1.0],
+            "糸魚川_降水量_mm__1_00": [2.0, np.nan],
+            "金沢_降水量_mm__1_00": [3.0, 3.0],
+        }
+    )
+
+    filled = fill_missing_by_same_day_time_location_average(df)
+
+    assert filled.loc[1, "富山_気温_℃__1_00"] == 11.5
+    assert filled.loc[1, "糸魚川_降水量_mm__1_00"] == 2.0
+    assert filled["富山_気温_℃__1_00"].notna().all()
+    assert filled["糸魚川_降水量_mm__1_00"].notna().all()
+
+
+def test_fill_missing_by_same_day_time_location_average_handles_numeric_string_columns_without_type_error():
+    """数値に変換できる文字列列は数値化したまま補完し、変換不能な文字列列は最頻値補完に切り替える。"""
+    df = pd.DataFrame(
+        {
+            "年月日": [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-01")],
+            "列車番号": [1, 2],
+            "富山_気温_℃__1_00": ["10.0", np.nan],
+            "糸魚川_気温_℃__1_00": ["12.0", "12.0"],
+            "金沢_気温_℃__1_00": ["11.0", "11.0"],
+            "富山_風向__1_00": ["北北西", np.nan],
+            "糸魚川_風向__1_00": ["北北西", "北北西"],
+            "金沢_風向__1_00": ["北", "北西"],
+        }
+    )
+
+    filled = fill_missing_by_same_day_time_location_average(df)
+
+    assert pd.api.types.is_numeric_dtype(filled["富山_気温_℃__1_00"])
+    assert filled.loc[1, "富山_気温_℃__1_00"] == 11.5
+    assert filled.loc[1, "富山_風向__1_00"] == "北北西"
+
+
+def test_fill_missing_by_same_day_time_location_average_uses_mode_for_string_wind_direction():
+    """風向きのような文字列特徴量は、同じ日・同じ時間帯の最頻値で補完する。"""
+    df = pd.DataFrame(
+        {
+            "年月日": [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-01")],
+            "列車番号": [1, 2],
+            "富山_風向__1_00": ["北北西", np.nan],
+            "糸魚川_風向__1_00": ["北北西", "北北西"],
+            "金沢_風向__1_00": ["北", "北西"],
+        }
+    )
+
+    filled = fill_missing_by_same_day_time_location_average(df)
+
+    assert filled.loc[1, "富山_風向__1_00"] == "北北西"
 
 
 def test_apply_two_stage_snow_prediction_uses_winter_flag_and_probability_threshold():

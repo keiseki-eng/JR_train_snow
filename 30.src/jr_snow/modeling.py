@@ -86,10 +86,11 @@ def apply_prediction_correction(predictions: np.ndarray, correction_amount: floa
 def save_submission(predictions: np.ndarray, output_path: str | Path = "submit.csv") -> pd.DataFrame:
     """予測結果をCSVとして保存する。
 
-    1列目に予測値を出力し、提出用ファイルとして利用できるようにする。
+    提出用CSVは index 列を含めず、予測値だけを1列で書き出す。
     """
-    output = pd.DataFrame(predictions)
+    values = np.asarray(predictions, dtype=float).reshape(-1)
+    output = pd.DataFrame({"予測値": values})
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output.to_csv(output_path, index=True, header=False)
+    output.to_csv(output_path, index=False, header=False)
     return output

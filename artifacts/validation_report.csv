@@ -1,2 +1,2 @@
 valid_wmae,train_rows,valid_rows,test_rows,feature_count,strategy
-0.004596245102759554,115,18,2430,1358,single_split
+0.00336422712638988,115,18,2430,1358,single_split

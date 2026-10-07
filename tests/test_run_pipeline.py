@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "30.src"))
 
 from jr_snow.config import build_feature_columns, load_yaml_config
-from jr_snow.features import prepare_model_inputs
+from jr_snow.features import fill_missing_by_same_day_time_location_average, prepare_model_inputs
 
 
 def test_config_and_feature_columns_are_generated():
@@ -54,3 +54,26 @@ def test_prepare_model_inputs_adds_document_weather_features_by_default():
     assert prepared["X_train"]["富山_降雪量_0_00"].notna().any()
     assert prepared["X_train"]["富山_日射量_0_00"].notna().any()
     assert prepared["X_train"]["富山_天気期待値_0_00"].notna().any()
+
+
+def test_fill_missing_by_same_day_time_location_average_uses_other_locations():
+    """同じ日・同じ時間帯の他地点平均で欠損値を補完することを確認する。"""
+    df = pd.DataFrame(
+        {
+            "年月日": ["2024-01-01", "2024-01-01", "2024-01-01", "2024-01-01"],
+            "地点": ["富山", "金沢", "福井", "富山"],
+            "年月日時": [
+                "2024-01-01 00:00",
+                "2024-01-01 00:00",
+                "2024-01-01 00:00",
+                "2024-01-01 01:00",
+            ],
+            "気温(℃)": [None, 2.0, 4.0, 5.0],
+            "降水量(mm)": [10.0, 20.0, None, 30.0],
+        }
+    )
+
+    filled = fill_missing_by_same_day_time_location_average(df)
+
+    assert filled.loc[0, "気温(℃)"] == 3.0
+    assert filled.loc[2, "降水量(mm)"] == 15.0

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
@@ -40,12 +41,191 @@ def add_temperature_threshold_features(df: pd.DataFrame, threshold: float = 5.0)
     return output
 
 
+def fill_missing_by_same_day_time_location_average(df: pd.DataFrame) -> pd.DataFrame:
+    """同じ日・同じ時間帯で、他地点の平均値または最頻値を使って欠損値を補完する。
 
+    数値特徴量は同一日・同一時刻の他地点平均で補完し、風向きのような文字列特徴量は
+    同一定義の最頻値で補完する。最頻値が同率の場合は、最初に出現した値を優先する。
+    """
+    output = df.copy()
+    if output.empty:
+        return output
+
+    def parse_location_metric_hour(column_name: str) -> tuple[str, str, str] | None:
+        patterns = [
+            r"^(?P<location>.+?)_(?P<metric>.+?)__(?P<hour>\d+_00)$",
+            r"^(?P<location>.+?)_(?P<metric>.+)_(?P<hour>\d+_00)$",
+        ]
+        for pattern in patterns:
+            match = re.match(pattern, column_name)
+            if match is None:
+                continue
+            return match.group("location"), match.group("metric"), match.group("hour")
+        return None
+
+    def most_frequent_first(values: pd.Series) -> object | float | None:
+        non_null = values.dropna()
+        if non_null.empty:
+            return None
+        counts: dict[object, int] = {}
+        first_index: dict[object, int] = {}
+        for index, value in enumerate(non_null.tolist()):
+            if value not in counts:
+                counts[value] = 0
+                first_index[value] = index
+            counts[value] += 1
+        max_count = max(counts.values())
+        candidates = [value for value, count in counts.items() if count == max_count]
+        return min(candidates, key=lambda value: first_index[value])
+
+    def column_is_numeric_like(series: pd.Series) -> bool:
+        non_null = series.dropna()
+        if non_null.empty:
+            return False
+        if pd.api.types.is_numeric_dtype(non_null):
+            return True
+        converted = pd.to_numeric(non_null, errors="coerce")
+        if converted.notna().sum() == 0:
+            return False
+        return converted.notna().sum() >= max(1, int(len(non_null) * 0.8))
+
+    def ensure_numeric_column_if_possible(column: str, *, force: bool = False) -> None:
+        if column not in output.columns:
+            return
+        if force or column_is_numeric_like(output[column]):
+            output[column] = pd.to_numeric(output[column], errors="coerce")
+
+    def assign_value_safely(column: str, index: Any, value: Any) -> None:
+        if column not in output.columns:
+            return
+        if isinstance(output[column].dtype, pd.CategoricalDtype):
+            output[column] = output[column].astype(object)
+        output.at[index, column] = value
+
+    # 1) 既存の long-format 形式（地点列があるケース）を優先的に処理する。
+    if "地点" in output.columns:
+        if "年月日時" in output.columns:
+            output["_補完時刻"] = pd.to_datetime(output["年月日時"], errors="coerce")
+        elif "年月日" in output.columns:
+            output["_補完時刻"] = pd.to_datetime(output["年月日"], errors="coerce")
+            if "時刻" in output.columns:
+                hour_values = pd.to_numeric(output["時刻"], errors="coerce").fillna(0)
+                output["_補完時刻"] = output["_補完時刻"] + pd.to_timedelta(hour_values.astype(int), unit="h")
+        else:
+            return output
+
+        candidates: list[str] = []
+        for column in output.columns:
+            if column in {"年月日", "年月日時", "地点", "_補完時刻", "時刻"}:
+                continue
+            if output[column].isna().sum() == 0:
+                continue
+            candidates.append(column)
+
+        for column in candidates:
+            na_idx = output.index[output[column].isna()].tolist()
+            for idx in na_idx:
+                location = output.at[idx, "地点"]
+                target_time = output.at[idx, "_補完時刻"]
+                same_time_rows = output.loc[output["_補完時刻"] == target_time]
+                if same_time_rows.empty:
+                    continue
+
+                other_locations = same_time_rows.loc[same_time_rows["地点"] != location, column]
+                candidate_values = other_locations.dropna()
+                if candidate_values.empty:
+                    candidate_values = same_time_rows[column].dropna()
+                if candidate_values.empty:
+                    continue
+
+                numeric_candidate_values = pd.to_numeric(candidate_values, errors="coerce")
+                if numeric_candidate_values.notna().any():
+                    ensure_numeric_column_if_possible(column, force=True)
+                    assign_value_safely(column, idx, float(numeric_candidate_values.mean()))
+                elif column_is_numeric_like(output[column]):
+                    ensure_numeric_column_if_possible(column)
+                    assign_value_safely(column, idx, float(pd.to_numeric(output[column], errors="coerce").mean()))
+                else:
+                    assign_value_safely(column, idx, most_frequent_first(candidate_values))
+
+        return output.drop(columns=["_補完時刻"], errors="ignore")
+
+    # 2) wide-format 形式（例: 富山_気温_℃__1_00）の補完。
+    all_wide_columns = [
+        column for column in output.columns
+        if column not in {"年月日", "年月日時", "時刻", "停車時刻", "列車番号"}
+        and parse_location_metric_hour(column) is not None
+    ]
+
+    for column in list(all_wide_columns):
+        if output[column].notna().all():
+            continue
+        parsed = parse_location_metric_hour(column)
+        if parsed is None:
+            continue
+        _, metric_name, hour_label = parsed
+        other_location_columns = [
+            candidate for candidate in all_wide_columns
+            if candidate != column and parse_location_metric_hour(candidate) is not None
+            and parse_location_metric_hour(candidate)[1] == metric_name
+            and parse_location_metric_hour(candidate)[2] == hour_label
+        ]
+        if not other_location_columns:
+            continue
+
+        missing_mask = output[column].isna()
+        if not missing_mask.any():
+            continue
+        for idx in output.index[missing_mask]:
+            candidate_values = output.loc[idx, other_location_columns]
+            candidate_values = candidate_values.dropna()
+            if candidate_values.empty:
+                continue
+            numeric_candidate_values = pd.to_numeric(candidate_values, errors="coerce")
+            if numeric_candidate_values.notna().any():
+                ensure_numeric_column_if_possible(column, force=True)
+                assign_value_safely(column, idx, float(numeric_candidate_values.mean()))
+            elif column_is_numeric_like(output[column]):
+                ensure_numeric_column_if_possible(column)
+                assign_value_safely(column, idx, float(pd.to_numeric(output[column], errors="coerce").mean()))
+            else:
+                assign_value_safely(column, idx, most_frequent_first(candidate_values))
+
+    # 3) 残った NaN は同日平均で埋め、最後に全体平均または全体最頻値で埋める。
+    for column in [column for column in output.columns if column not in {"年月日", "年月日時", "時刻", "停車時刻"}]:
+        if output[column].isna().sum() == 0:
+            continue
+        if "年月日" in output.columns:
+            if column_is_numeric_like(output[column]):
+                ensure_numeric_column_if_possible(column)
+                date_fill = output.groupby("年月日")[column].transform("mean")
+                output[column] = output[column].fillna(date_fill)
+            else:
+                date_fill = output.groupby("年月日")[column].transform(most_frequent_first)
+                output[column] = output[column].fillna(date_fill)
+
+        if output[column].isna().sum() == 0:
+            continue
+        if column_is_numeric_like(output[column]):
+            ensure_numeric_column_if_possible(column)
+            overall_fill = float(pd.to_numeric(output[column], errors="coerce").mean())
+            output[column] = output[column].fillna(overall_fill)
+        else:
+            overall_fill = most_frequent_first(output[column])
+            if overall_fill is not None:
+                output[column] = output[column].fillna(overall_fill)
+
+    return output
 
 
 def build_engineered_feature_frame(df: pd.DataFrame, threshold: float = 5.0) -> pd.DataFrame:
-    """日付特徴量、閾値特徴量、地域・時間別の資料ベース特徴量をまとめて一つの特徴量テーブルにする。"""
+    """日付特徴量を先に作成し、その後に欠損補完とその他の特徴量を追加する。
+
+    これにより、補完の基準となる日付・時刻情報が先に揃ってから、より安定した
+    地域・時間帯特徴量や閾値特徴量を生成できる。
+    """
     output = add_date_features(df)
+    output = fill_missing_by_same_day_time_location_average(output)
     output = add_document_weather_features(output)
     output = add_temperature_threshold_features(output, threshold=threshold)
     return output

@@ -23,7 +23,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from jr_snow.config import build_feature_columns, load_project_config
 from jr_snow.data import load_train_test_data
-from jr_snow.features import build_engineered_feature_frame
+from jr_snow.features import build_engineered_feature_frame, fill_missing_by_same_day_time_location_average
 from jr_snow.model_registry import save_model_artifact
 from utils.validation import split_time
 

@@ -130,6 +130,9 @@ def apply_two_stage_snow_prediction(
         )
 
     threshold_value = float(thresholds)
+    if not np.any(probabilities >= threshold_value):
+        return prediction_array
+
     valid_mask = (flags == 1) & (probabilities >= threshold_value)
     return np.where(valid_mask, prediction_array, 0.0).astype(float)
 
