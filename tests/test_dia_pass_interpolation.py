@@ -6,6 +6,7 @@
 import importlib.util
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 module_path = Path(__file__).resolve().parents[1] / "30.src" / "utils" / "utils.py"
@@ -59,6 +60,30 @@ def test_station_pass_weather_features_use_pass_hour():
 
     pd.testing.assert_series_equal(result["金沢_列車通過時_気温"], pd.Series([10.0, 13.0], name="金沢_列車通過時_気温"))
     pd.testing.assert_series_equal(result["富山_列車通過時_気温"], pd.Series([20.0, 22.0], name="富山_列車通過時_気温"))
+
+
+def test_build_pass_time_weather_features_fills_missing_source_temp_before_creating_columns():
+    """通過時刻の気温を作る前に、同じ日時・同じ時間帯の欠損は他地点平均で埋める。"""
+    df = pd.DataFrame(
+        {
+            "年月日": ["2024-01-01", "2024-01-01"],
+            "金沢": ["6:10", "7:40"],
+            "富山": ["8:15", "9:00"],
+            "金沢_気温_℃__6_00": [10.0, 11.0],
+            "富山_気温_℃__6_00": [np.nan, 12.0],
+            "金沢_気温_℃__7_00": [11.0, 13.0],
+            "富山_気温_℃__7_00": [12.0, np.nan],
+            "金沢_気温_℃__8_00": [13.0, 14.0],
+            "富山_気温_℃__8_00": [20.0, 21.0],
+        }
+    )
+
+    result = build_pass_time_weather_features(df, weather_variables=["気温"], station_columns=["金沢", "富山"])
+
+    assert pd.notna(result.loc[0, "富山_列車通過時_気温"])
+    assert pd.notna(result.loc[1, "富山_列車通過時_気温"])
+    assert result.loc[0, "富山_列車通過時_気温"] == 10.5
+    assert result.loc[1, "金沢_列車通過時_気温"] == 13.0
 
 
 def test_region_time_weather_features_are_added_from_document_formulas():

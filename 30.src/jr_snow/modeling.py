@@ -71,6 +71,31 @@ def train_lightgbm_model(
     return model
 
 
+def train_lightgbm_model_on_full_data(
+    X: pd.DataFrame,
+    y: pd.Series,
+    categorical_cols: list[str],
+    model_params: dict[str, Any],
+    num_boost_round: int = 1000,
+):
+    """CV検証データを含む全学習データで最終モデルを学習する。
+
+    最終学習では検証用データを切り出さず、学習可能な全データを使って最終モデルを
+    1回だけ学習する。モデル選定は CV によって行うが、最終出力モデルはこの学習で
+    作成したモデルを用いる。
+    """
+    if lgb is None:
+        if LinearRegression is None:
+            raise ModuleNotFoundError("lightgbm is required for training. Install it with: pip install lightgbm")
+
+        model = LinearRegression()
+        model.fit(X, y)
+        return model
+
+    dataset = lgb.Dataset(X, y, categorical_feature=categorical_cols)
+    return lgb.train(model_params, dataset, num_boost_round=num_boost_round)
+
+
 def predict_submission(model: Any, df_test: pd.DataFrame, feature_list: list[str]) -> np.ndarray:
     """提出用テストデータに対して予測値を出す。"""
     prediction_df = df_test.reindex(columns=feature_list)
@@ -86,10 +111,13 @@ def apply_prediction_correction(predictions: np.ndarray, correction_amount: floa
 def save_submission(predictions: np.ndarray, output_path: str | Path = "submit.csv") -> pd.DataFrame:
     """予測結果をCSVとして保存する。
 
-    提出用CSVは index 列を含めず、予測値だけを1列で書き出す。
+    サンプル提出ファイルと同じ形式で、行番号 + 予測値の2列を保存する。
     """
     values = np.asarray(predictions, dtype=float).reshape(-1)
-    output = pd.DataFrame({"予測値": values})
+    output = pd.DataFrame({
+        "row_id": np.arange(len(values), dtype=int),
+        "予測値": values,
+    })
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.to_csv(output_path, index=False, header=False)

@@ -26,3 +26,6 @@ INTERIUM_PATH:
     # "test_data": "/home/keiseki/JR_train_snow/20.Data/test_time_weather.pkl"
     # 着雪量予測フラグを付与した２段階判定用データ
     "test_data": "/home/keiseki/JR_train_snow/20.Data/test_exist_snow_flg.pkl"
+
+    # 特徴量生成完了後の中間データセット
+    "intermediate_data": "/home/keiseki/JR_train_snow/artifacts/intermediate/prepared_dataset.pkl"

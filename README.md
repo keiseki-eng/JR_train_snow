@@ -82,6 +82,28 @@ filtered_df = df[df["着雪有無フラグ"] >= thresholds]
 - `test_data` は今回の要件で勝手に除外しない
 - train/validation で同じフィルタ条件が適用される
 - 時系列 split のロジックそのものは変更しない
+- 最終学習では CV で検証に使ったデータも含め、利用可能な全学習データを用いる
+- 最終モデルの学習結果は未知データの汎化性能として報告しない
+
+### 最終学習（全学習データの再学習）
+
+CV による評価とモデル設定の選定が完了した後、最終モデルは以下の条件で再学習します。
+
+- 全学習データを使用する（CV で検証に使ったデータも含む）
+- 学習対象の抽出条件、特徴量、前処理、2段階予測の仕様は CV 時と同一にする
+- CV で選定した LightGBM 設定を使う
+- テストデータは予測にのみ使い、目的変数は学習や設定選定に使わない
+- 最終学習後にテストデータを予測し、既存の提出ファイル形式を維持して保存する
+
+実行時の基本運用は「最終学習あり」です。最終学習を行わず既存のモデルを再利用したい場合は、以下のように引数で省略できます。
+
+```bash
+source .venv/bin/activate
+python run.py --mode full
+python run.py --mode full --skip-final-training
+```
+
+`--skip-final-training` を指定した場合は、既存の `--model-path` にあるモデルを読み込み、推論のみを実行します。
 
 ### 実行方法
 
@@ -118,16 +140,28 @@ python run.py --mode predict
 python run.py --mode full
 ```
 
-### 学習のみ
+### 最終学習を省略して既存モデルで推論
 
 ```bash
-python run.py --mode train
+python run.py --mode full --skip-final-training
 ```
 
-### 推論のみ
+### 特徴量生成済み中間データを作成
 
 ```bash
-python run.py --mode predict
+python run.py --mode prepare --intermediate-data artifacts/intermediate/prepared_dataset.pkl
+```
+
+### 学習のみ（中間データを再利用）
+
+```bash
+python run.py --mode train --intermediate-data artifacts/intermediate/prepared_dataset.pkl
+```
+
+### 推論のみ（中間データを再利用）
+
+```bash
+python run.py --mode predict --intermediate-data artifacts/intermediate/prepared_dataset.pkl
 ```
 
 ### CV 確認

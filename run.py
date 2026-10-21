@@ -17,6 +17,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
 SRC_ROOT = ROOT / "30.src"
+DEFAULT_INTERMEDIATE_DATA_PATH = ROOT / "artifacts" / "intermediate" / "prepared_dataset.pkl"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
@@ -28,7 +29,13 @@ from jr_snow.feature_importance import save_feature_importance, save_shap_summar
 from jr_snow.features import add_document_weather_features, prepare_model_inputs
 from jr_snow.logging_utils import setup_logger
 from jr_snow.model_registry import save_model_artifact
-from jr_snow.modeling import predict_submission, save_submission, train_lightgbm_model, apply_prediction_correction
+from jr_snow.modeling import (
+    apply_prediction_correction,
+    predict_submission,
+    save_submission,
+    train_lightgbm_model,
+    train_lightgbm_model_on_full_data,
+)
 from jr_snow.reporting import save_validation_report
 
 
@@ -40,12 +47,14 @@ def parse_args() -> argparse.Namespace:
         argparse.Namespace: どの処理を実行するかを表す設定値。
     """
     parser = argparse.ArgumentParser(description="JR_train_snow training and inference pipeline")
-    # どの工程を実行するかを選ぶ。cvは交差検証、trainは学習、predictは予測、fullは両方を実施。
-    parser.add_argument("--mode", choices=["train", "predict", "full", "cv"], default="full")
+    # どの工程を実行するかを選ぶ。prepare は特徴量生成済みデータセットを保存し、
+    # train / predict / full はその中間データを再利用する。
+    parser.add_argument("--mode", choices=["prepare", "train", "predict", "full", "cv"], default="full")
     parser.add_argument("--config", type=str, default=str(ROOT / "00.config" / "config.yaml"))
     parser.add_argument("--path-config", type=str, default=str(ROOT / "00.config" / "path.yaml"))
     parser.add_argument("--train-data", type=str, default=None)
     parser.add_argument("--test-data", type=str, default=None)
+    parser.add_argument("--intermediate-data", type=str, default=None, help="特徴量生成後の中間データセットを保存/再利用するpickleファイル")
     parser.add_argument("--model-path", type=str, default=str(ROOT / "artifacts" / "lightgbm_model.pkl"))
     parser.add_argument("--output-path", type=str, default=str(ROOT / "submit.csv"))
     parser.add_argument("--num-boost-round", type=int, default=1000)
@@ -67,6 +76,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "テストデータの '着雪量予測フラグ' が 0 の行は予測結果を 0 にし、"
             "1 の行だけモデル予測を使う二段階予測を有効化する。"
+        ),
+    )
+    parser.add_argument(
+        "--skip-final-training",
+        action="store_true",
+        help=(
+            "最終学習を実行せず、既存のモデルファイルを再利用する。"
+            "既定では全学習データを用いた最終学習を実行する。"
         ),
     )
     return parser.parse_args()
@@ -152,6 +169,37 @@ def resolve_cv_folds(cv_folds: int | None, config: dict) -> int:
     if isinstance(value, int) and value >= 2:
         return value
     return 3
+
+
+def resolve_intermediate_data_path(intermediate_path: str | None, path_config: dict) -> Path:
+    """中間データセットの保存先をCLI・設定ファイル・デフォルト順で決める。"""
+    if intermediate_path is not None:
+        return Path(intermediate_path)
+
+    path_map = path_config.get("INTERIUM_PATH", path_config)
+    for key in ("intermediate_data", "prepared_data", "feature_data", "feature_engineered_data"):
+        value = path_map.get(key)
+        if value:
+            return Path(value)
+    return DEFAULT_INTERMEDIATE_DATA_PATH
+
+
+def save_intermediate_dataset(prepared: dict[str, object], output_path: str | Path) -> Path:
+    """特徴量生成後の学習・検証・推論データをpickleとして保存する。"""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as file:
+        pickle.dump(prepared, file)
+    return path
+
+
+def load_intermediate_dataset(path: str | Path) -> dict[str, object]:
+    """中間データセットを読み込んで学習/推論へ再利用する。"""
+    with Path(path).open("rb") as file:
+        prepared = pickle.load(file)
+    if not isinstance(prepared, dict):
+        raise TypeError(f"Intermediate dataset is not a dictionary: {path}")
+    return prepared
 
 
 def run_cv_models(
@@ -276,6 +324,55 @@ def evaluate_cv_folds(
     }
 
 
+def train_final_model_on_all_data(
+    df: pd.DataFrame,
+    feature_columns: dict,
+    model_params: dict,
+    *,
+    target_col: str = "合計",
+    num_boost_round: int = 1000,
+    logger: logging.Logger | None = None,
+):
+    """CVの検証データを含めて、利用可能な全学習データで最終モデルを再学習する。"""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    working_df = df.copy()
+    working_df = add_document_weather_features(working_df)
+    if "年月日" in working_df.columns:
+        working_df["年月日"] = pd.to_datetime(working_df["年月日"])
+    working_df = working_df.sort_values("年月日").reset_index(drop=True)
+
+    feature_list = list(feature_columns.get("feature_list", []))
+    engineered_cols = [
+        column for column in working_df.columns if column not in feature_list and "ge_5.0_C" in column
+    ]
+    feature_list = list(dict.fromkeys(feature_list + engineered_cols))
+    categorical_cols = [
+        column for column in feature_columns.get("categorical_cols", []) if column in feature_list
+    ]
+    fix_columns = feature_list + ["年月日", target_col]
+    working_df = working_df.reindex(columns=fix_columns)
+
+    X = working_df[feature_list].copy()
+    y = working_df[target_col].copy()
+    for column in feature_list:
+        if column in categorical_cols and column in X.columns:
+            X[column] = X[column].astype("category")
+        elif column in X.columns:
+            X[column] = pd.to_numeric(X[column], errors="coerce")
+
+    y = pd.to_numeric(y, errors="coerce")
+    logger.info("Final model retraining: rows=%d, features=%d, categories=%s", len(X), len(feature_list), categorical_cols)
+    return train_lightgbm_model_on_full_data(
+        X,
+        y,
+        categorical_cols,
+        model_params,
+        num_boost_round=num_boost_round,
+    )
+
+
 def select_model_for_final_inference(
     cv_results: dict[str, list | float | dict],
     strategy: str,
@@ -363,12 +460,40 @@ def main() -> None:
             len(train_df),
         )
 
-    prepared = prepare_model_inputs(
-        df_train=train_df,
-        df_test=test_df,
-        feature_columns=feature_columns,
-        split_date=config["split_date"],
-    )
+    model_path = Path(args.model_path)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+
+    strategy = args.final_model_strategy
+    logger.info(f"Final model strategy : {strategy}")
+    logger.info(f"Final model strategy (CLI): {args.final_model_strategy}")
+
+    intermediate_path = resolve_intermediate_data_path(args.intermediate_data, path_config)
+
+    if args.mode == "prepare":
+        logger.info(f"Feature dataset generation mode: {intermediate_path}")
+        prepared = prepare_model_inputs(
+            df_train=train_df,
+            df_test=test_df,
+            feature_columns=feature_columns,
+            split_date=config["split_date"],
+        )
+        save_intermediate_dataset(prepared, intermediate_path)
+        logger.info(f"Intermediate dataset saved: {intermediate_path}")
+        logger.info(f"Train/valid/test rows: {len(prepared['X_train'])}, {len(prepared['X_valid'])}, {len(prepared['df_test_processed'])}")
+        return
+
+    if intermediate_path.exists():
+        prepared = load_intermediate_dataset(intermediate_path)
+        logger.info(f"Using cached intermediate dataset: {intermediate_path}")
+    else:
+        prepared = prepare_model_inputs(
+            df_train=train_df,
+            df_test=test_df,
+            feature_columns=feature_columns,
+            split_date=config["split_date"],
+        )
+        save_intermediate_dataset(prepared, intermediate_path)
+        logger.info(f"Intermediate dataset saved: {intermediate_path}")
 
     logger.info(f"Train件数         : {len(prepared['X_train']) + len(prepared['y_train'])}")
     logger.info(f"Validation件数    : {len(prepared['X_valid']) + len(prepared['y_valid'])}")
@@ -379,100 +504,55 @@ def main() -> None:
     logger.info(f"使用特徴量(文字列): {', '.join(prepared['feature_list'])}")
     logger.info(f"LightGBMパラメータ: {config['MODEL_PARAMS']}")
 
-    model_path = Path(args.model_path)
-    model_path.parent.mkdir(parents=True, exist_ok=True)
-
-    strategy = args.final_model_strategy
-    logger.info(f"Final model strategy : {strategy}")
-    logger.info(f"Final model strategy (CLI): {args.final_model_strategy}")
-
     if args.mode in {"train", "full"}:
-        if strategy == "single_split":
-            # 通常の one-split 学習を実施し、最終推論のベースラインモデルとして保存する。
-            model = train_lightgbm_model(
-                prepared["X_train"],
-                prepared["X_valid"],
-                prepared["y_train"],
-                prepared["y_valid"],
-                prepared["categorical_cols"],
-                config["MODEL_PARAMS"],
-                num_boost_round=args.num_boost_round,
-                early_stopping_rounds=args.early_stopping_rounds,
-            )
-            model_version_path = save_model_artifact(model, ROOT / "artifacts", prefix="lightgbm_model")
-            save_feature_importance(model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
-            save_shap_summary_plot(model, prepared["X_valid"], ROOT / "artifacts" / "shap")
-            save_validation_report(
-                {
-                    "valid_wmae": compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"])),
-                    "train_rows": len(prepared["X_train"]),
-                    "valid_rows": len(prepared["X_valid"]),
-                    "test_rows": len(prepared["df_test_processed"]),
-                    "feature_count": len(prepared["feature_list"]),
-                    "strategy": strategy,
-                },
-                ROOT / "artifacts" / "validation_report.csv",
-            )
-            logger.info(f"Training result   : best_iteration={getattr(model, 'best_iteration', 'n/a')}, best_score={getattr(model, 'best_score', 'n/a')}")
-            logger.info(f"Model saved      : {model_version_path}")
+        if args.skip_final_training:
+            if model_path.exists():
+                with model_path.open("rb") as file:
+                    model = pickle.load(file)
+                logger.info(f"Model loaded     : {model_path}")
+            else:
+                raise FileNotFoundError(f"Skip-final-training is enabled but no model exists at {model_path}")
         else:
-            # CV ベースのモデル選択では、各 fold のモデルを評価して最終予測に使うモデル群を作る。
-            cv_results = run_cv_models(
+            final_model = train_final_model_on_all_data(
                 train_df,
                 feature_columns,
                 config["MODEL_PARAMS"],
-                n_splits=cv_folds,
-                logger=logger,
                 target_col="合計",
                 num_boost_round=args.num_boost_round,
-                early_stopping_rounds=args.early_stopping_rounds,
+                logger=logger,
             )
-            strategy_label, selected_model, selected_wmae = select_model_for_final_inference(cv_results, strategy)
-            logger.info(f"Selected strategy result : {strategy_label}, selected_wmae={selected_wmae:.6f}")
-            if selected_model is not None:
-                model_version_path = save_model_artifact(selected_model, ROOT / "artifacts", prefix="lightgbm_model")
-                save_feature_importance(selected_model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
-                save_shap_summary_plot(selected_model, prepared["X_valid"], ROOT / "artifacts" / "shap")
-                logger.info(f"Model saved      : {model_version_path}")
-                model = selected_model
-            else:
-                model = None
+            model_version_path = save_model_artifact(final_model, ROOT / "artifacts", prefix="lightgbm_model")
+            save_feature_importance(final_model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
+            try:
+                save_shap_summary_plot(final_model, prepared["X_valid"], ROOT / "artifacts" / "shap")
+            except ModuleNotFoundError:
+                logger.warning("SHAP is not installed; skipping plot export for the final model.")
+            save_validation_report(
+                {
+                    "valid_wmae": compute_wmae(prepared["y_valid"], final_model.predict(prepared["X_valid"])),
+                    "train_rows": len(train_df),
+                    "valid_rows": len(prepared["y_valid"]),
+                    "test_rows": len(prepared["df_test_processed"]),
+                    "feature_count": len(prepared["feature_list"]),
+                    "strategy": "full_data_retrain",
+                },
+                ROOT / "artifacts" / "validation_report.csv",
+            )
+            logger.info("Final model retrained on all available training data")
+            logger.info(f"Model saved      : {model_version_path}")
+            model = final_model
     else:
         with model_path.open("rb") as file:
             model = pickle.load(file)
         logger.info(f"Model loaded     : {model_path}")
 
     if args.mode in {"predict", "full"}:
-        # 推論後に提出用CSVを作成し、検証WMAEも併せてログ出力する。
-        if strategy == "cv_average":
-            cv_results = run_cv_models(
-                train_df,
-                feature_columns,
-                config["MODEL_PARAMS"],
-                n_splits=cv_folds,
-                logger=logger,
-                target_col="合計",
-                num_boost_round=args.num_boost_round,
-                early_stopping_rounds=args.early_stopping_rounds,
-            )
-            fold_models = [item["model"] for item in cv_results["fold_results"]]
-            test_predictions = np.mean(
-                [model.predict(prepared["df_test_processed"][prepared["feature_list"]]) for model in fold_models],
-                axis=0,
-            )
-            valid_predictions = np.mean(
-                [model.predict(prepared["X_valid"]) for model in fold_models],
-                axis=0,
-            )
-            predictions = test_predictions
-            predictions = apply_prediction_correction(predictions, config.get("correction_amount", 0.0))
-            valid_wmae = compute_wmae(prepared["y_valid"], valid_predictions)
-        else:
-            if model is None:
-                raise ValueError(f"No model is available for final inference strategy='{strategy}'")
-            predictions = predict_submission(model, prepared["df_test_processed"], prepared["feature_list"])
-            predictions = apply_prediction_correction(predictions, config.get("correction_amount", 0.0))
-            valid_wmae = compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"]))
+        # 最終推論では、CVでの設定選定後に再学習した最終モデルを使う。
+        if model is None:
+            raise ValueError(f"No model is available for final inference strategy='{strategy}'")
+        predictions = predict_submission(model, prepared["df_test_processed"], prepared["feature_list"])
+        predictions = apply_prediction_correction(predictions, config.get("correction_amount", 0.0))
+        valid_wmae = compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"]))
 
         if args.two_stage_snow_prediction:
             winter_flag_column = prepared["df_test_processed"].get("冬季フラグ")

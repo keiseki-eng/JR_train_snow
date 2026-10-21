@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -82,7 +83,7 @@ def test_save_shap_summary_plot_creates_images(tmp_path: Path):
         def __init__(self):
             self.n_features_in_ = 3
 
-    import shap
+    shap = pytest.importorskip("shap")
 
     class DummyExplainer:
         def __init__(self, model, data):
@@ -118,6 +119,68 @@ def test_parse_args_accepts_two_stage_snow_prediction_flag():
     assert args.two_stage_snow_prediction is True
 
 
+def test_parse_args_supports_skipping_final_training():
+    """最終学習を省略するCLI設定を受け付けることを確認する。"""
+    with patch.object(sys, "argv", ["run.py", "--mode", "full", "--skip-final-training"]):
+        args = run.parse_args()
+    assert args.skip_final_training is True
+
+
+def test_train_final_model_uses_all_available_training_rows():
+    """最終学習はCVで使った検証データも含めて全学習データで学習する。"""
+    df = pd.DataFrame(
+        {
+            "年月日": pd.date_range("2024-01-01", periods=12, freq="D"),
+            "合計": [0.0, 2.0, 1.0, 3.0, 2.0, 4.0, 5.0, 3.0, 6.0, 4.0, 7.0, 5.0],
+            "year": 2024,
+            "month": 1,
+            "day": list(range(1, 13)),
+            "x": list(range(12)),
+        }
+    )
+    feature_columns = {"feature_list": ["year", "month", "day", "x"], "categorical_cols": ["year", "month", "day"]}
+
+    final_model = run.train_final_model_on_all_data(
+        df,
+        feature_columns,
+        {"objective": "regression", "metric": "l2", "verbose": -1},
+        target_col="合計",
+        num_boost_round=5,
+    )
+
+    assert final_model is not None
+    assert hasattr(final_model, "predict")
+
+
+def test_parse_args_accepts_prepare_mode_and_intermediate_dataset_path():
+    """特徴量中間ファイル生成用のCLI引数を受け取れることを確認する。"""
+    with patch.object(sys, "argv", ["run.py", "--mode", "prepare", "--intermediate-data", "/tmp/prepared.pkl"]):
+        args = run.parse_args()
+    assert args.mode == "prepare"
+    assert args.intermediate_data == "/tmp/prepared.pkl"
+
+
+def test_save_and_load_intermediate_dataset_round_trip(tmp_path: Path):
+    """特徴量生成済みデータセットを中間ファイルとして保存・再読込できることを確認する。"""
+    prepared = {
+        "X_train": pd.DataFrame({"x": [1.0, 2.0]}),
+        "X_valid": pd.DataFrame({"x": [3.0]}),
+        "y_train": pd.Series([10.0, 20.0]),
+        "y_valid": pd.Series([30.0]),
+        "df_test_processed": pd.DataFrame({"x": [4.0, 5.0]}),
+        "feature_list": ["x"],
+        "categorical_cols": [],
+    }
+    output_path = tmp_path / "prepared.pkl"
+
+    saved_path = run.save_intermediate_dataset(prepared, output_path)
+    loaded = run.load_intermediate_dataset(saved_path)
+
+    assert saved_path == output_path
+    assert loaded["feature_list"] == ["x"]
+    assert loaded["df_test_processed"].shape == (2, 1)
+
+
 def test_apply_two_stage_snow_prediction_zeroes_non_target_rows():
     """着雪量予測フラグが0の行は0を返し、1の行だけモデル予測を使うことを確認する。"""
     predictions = np.array([10.0, 20.0, 30.0])
@@ -128,15 +191,16 @@ def test_apply_two_stage_snow_prediction_zeroes_non_target_rows():
     assert gated.tolist() == [0.0, 20.0, 0.0]
 
 
-def test_save_submission_uses_single_prediction_column_without_index(tmp_path: Path):
-    """提出用CSVはインデックス列を含めず、1列だけの予測値を保存することを確認する。"""
+def test_save_submission_keeps_row_index_and_prediction_value(tmp_path: Path):
+    """提出用CSVは行番号と予測値の2列を保持することを確認する。"""
     output_path = tmp_path / "submit.csv"
 
     saved = run.save_submission(np.array([0.1, 0.2, 0.3]), output_path)
 
-    assert saved.shape == (3, 1)
-    assert saved.iloc[:, 0].tolist() == [0.1, 0.2, 0.3]
-    assert output_path.read_text(encoding="utf-8").splitlines() == ["0.1", "0.2", "0.3"]
+    assert saved.shape == (3, 2)
+    assert saved.iloc[:, 0].tolist() == [0, 1, 2]
+    assert saved.iloc[:, 1].tolist() == [0.1, 0.2, 0.3]
+    assert output_path.read_text(encoding="utf-8").splitlines() == ["0,0.1", "1,0.2", "2,0.3"]
 
 
 def test_setup_logger_creates_timestamped_log_and_removes_stale_fixed_log(tmp_path: Path):
