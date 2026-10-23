@@ -112,6 +112,11 @@ def train_lightgbm_model(
         feval=wmae_eval,
         callbacks=[lgb.early_stopping(early_stopping_rounds)],
     )
+    # Persist the category column names in DataFrame column order. LightGBM stores
+    # category value lists, but not their column names; inference must restore both.
+    model._jr_snow_categorical_cols = X_train.select_dtypes(
+        include=["category"]
+    ).columns.tolist()
     return model
 
 
@@ -136,13 +141,60 @@ def train_lightgbm_model_on_full_data(
         model.fit(X, y)
         return model
 
-    dataset = lgb.Dataset(X, y, categorical_feature=categorical_cols)
-    return lgb.train(model_params, dataset, num_boost_round=num_boost_round)
+    X = X.copy()
+    # The categorical column list must describe the actual pandas dtypes passed to
+    # LightGBM, not just the configured names.
+    category_columns = X.select_dtypes(include=["category"]).columns.tolist()
+    dataset = lgb.Dataset(X, y, categorical_feature=category_columns)
+    model = lgb.train(model_params, dataset, num_boost_round=num_boost_round)
+    # Keep names in the same order as model.pandas_categorical.
+    model._jr_snow_categorical_cols = category_columns
+    return model
 
 
 def predict_submission(model: Any, df_test: pd.DataFrame, feature_list: list[str]) -> np.ndarray:
-    """提出用テストデータに対して予測値を出す。"""
-    prediction_df = df_test.reindex(columns=feature_list)
+    """学習時の特徴量順・カテゴリ定義を復元して提出用データを予測する。"""
+    model_features = (
+        list(model.feature_name())
+        if callable(getattr(model, "feature_name", None))
+        else list(feature_list)
+    )
+    prediction_df = df_test.reindex(columns=model_features).copy()
+
+    categorical_cols = getattr(model, "_jr_snow_categorical_cols", None)
+    pandas_categorical = getattr(model, "pandas_categorical", None)
+
+    if categorical_cols is not None and pandas_categorical is not None:
+        if len(categorical_cols) != len(pandas_categorical):
+            raise ValueError(
+                "学習モデル内のカテゴリ列名とカテゴリ定義の数が一致しません: "
+                f"columns={len(categorical_cols)}, categories={len(pandas_categorical)}, "
+                f"categorical_cols={categorical_cols}"
+            )
+
+        # Use the exact category vocabulary saved by LightGBM during training.
+        # Unknown test categories become NaN, matching LightGBM's training semantics.
+        for column, categories in zip(categorical_cols, pandas_categorical):
+            if column not in prediction_df.columns:
+                raise ValueError(
+                    f"学習時のカテゴリ特徴量が推論データにありません: {column}"
+                )
+            dtype = pd.CategoricalDtype(
+                categories=list(categories),
+                ordered=False,
+            )
+            prediction_df[column] = (
+                prediction_df[column].astype("string").astype(dtype)
+            )
+
+        # Prevent test-only object/category columns from silently becoming extra
+        # categorical features and triggering LightGBM's category-count mismatch.
+        for column in prediction_df.columns:
+            if column not in categorical_cols:
+                prediction_df[column] = pd.to_numeric(
+                    prediction_df[column], errors="coerce"
+                )
+
     return model.predict(prediction_df)
 
 def apply_prediction_correction(predictions: np.ndarray, correction_amount: float) -> np.ndarray:
