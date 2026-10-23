@@ -602,7 +602,8 @@ def main() -> None:
         logger.info(f"Intermediate dataset saved: {intermediate_path}")
         logger.info(f"Train/valid/test rows: {len(prepared['X_train'])}, {len(prepared['X_valid'])}, {len(prepared['df_test_processed'])}")
         return
-
+    
+    
     if args.mode in {"train", "full"}:
         prepared = prepare_model_inputs(
             df_train=train_df,
@@ -624,6 +625,8 @@ def main() -> None:
         )
         save_intermediate_dataset(prepared, intermediate_path)
         logger.info(f"Intermediate dataset saved: {intermediate_path}")
+
+    validation_X_for_prediction = prepared["X_valid"]
 
     logger.info(f"Train件数         : {len(prepared['X_train']) + len(prepared['y_train'])}")
     logger.info(f"Validation件数    : {len(prepared['X_valid']) + len(prepared['y_valid'])}")
@@ -655,6 +658,7 @@ def main() -> None:
                 threshold=thresholds,
                 reference_frame=prepared["X_valid"],
             )
+            validation_X_for_prediction = final_X_valid
             model_version_path = save_model_artifact(final_model, ROOT / "artifacts", prefix="lightgbm_model")
             save_feature_importance(final_model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
             try:
@@ -697,7 +701,10 @@ def main() -> None:
             raise ValueError(f"No model is available for final inference strategy='{strategy}'")
         predictions = predict_submission(model, prepared["df_test_processed"], prepared["feature_list"])
         predictions = apply_prediction_correction(predictions, config.get("correction_amount", 0.0))
-        valid_wmae = compute_wmae(prepared["y_valid"], model.predict(prepared["X_valid"]))
+        valid_wmae = compute_wmae(
+            prepared["y_valid"],
+            model.predict(validation_X_for_prediction),
+        )
 
         if args.two_stage_snow_prediction:
             winter_flag_column = prepared["df_test_processed"].get("冬季フラグ")
