@@ -135,10 +135,34 @@ def prepare_model_inputs(
     X_valid = X_valid[feature_list].copy()
     df_test_processed = df_test.reindex(columns=feature_list)
 
-    cat_cols = [column for column in categorical_cols if column in X_train.columns]
-    obj_cols = X_train.select_dtypes(include=["object"]).columns.tolist()
-    category_columns = sorted(set(cat_cols + obj_cols).intersection(X_train.columns))
-    align_category_dtypes([X_train, X_valid, df_test_processed], category_columns)
+    
+    cat_cols = [
+        column
+        for column in categorical_cols
+        if column in X_train.columns
+    ]
+
+    # 設定で指定された列だけでなく、object型・category型の列も
+    # カテゴリ列として統一して扱う。
+    object_cols = X_train.select_dtypes(
+        include=["object"]
+    ).columns.tolist()
+
+    existing_category_cols = X_train.select_dtypes(
+        include=["category"]
+    ).columns.tolist()
+
+    category_columns = sorted(
+        set(cat_cols + object_cols + existing_category_cols)
+        .intersection(X_train.columns)
+    )
+
+    # train / valid / testでカテゴリの定義を統一する。
+    align_category_dtypes(
+        [X_train, X_valid, df_test_processed],
+        category_columns,
+    )
+
 
     # 日照時間の文字列が混ざっている場合は数値化してモデル入力に適した形式に整える。
     for column in [column for column in X_train.columns if "日照時間" in column]:
@@ -153,5 +177,5 @@ def prepare_model_inputs(
         "y_valid": y_valid,
         "df_test_processed": df_test_processed,
         "feature_list": feature_list,
-        "categorical_cols": cat_cols,
+        "categorical_cols": category_columns,
     }

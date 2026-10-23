@@ -324,6 +324,7 @@ def evaluate_cv_folds(
     }
 
 
+
 def train_final_model_on_all_data(
     df: pd.DataFrame,
     feature_columns: dict,
@@ -337,53 +338,150 @@ def train_final_model_on_all_data(
     threshold: float = 5.0,
     reference_frame: pd.DataFrame | None = None,
 ):
-    """CVの検証データを含めて、利用可能な全学習データで最終モデルを再学習する。"""
+    """全学習データで最終モデルを学習する。
+
+    学習データと検証データでカテゴリ列・カテゴリ定義を統一する。
+    """
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    resolved_feature_list = list(feature_list or feature_columns.get("feature_list", []))
-    resolved_categorical_cols = list(categorical_cols or feature_columns.get("categorical_cols", []))
-    resolved_categorical_cols = [
-        column for column in resolved_categorical_cols if column in resolved_feature_list
-    ]
+    resolved_feature_list = list(
+        feature_list or feature_columns.get("feature_list", [])
+    )
+    configured_categorical_cols = list(
+        categorical_cols or feature_columns.get("categorical_cols", [])
+    )
 
-    working_df = build_engineered_feature_frame(df.copy(), threshold=threshold)
+    working_df = build_engineered_feature_frame(
+        df.copy(),
+        threshold=threshold,
+    )
+
     if "年月日" in working_df.columns:
-        working_df["年月日"] = pd.to_datetime(working_df["年月日"])
-    working_df = working_df.sort_values("年月日").reset_index(drop=True)
+        working_df["年月日"] = pd.to_datetime(
+            working_df["年月日"]
+        )
 
-    fix_columns = resolved_feature_list + ["年月日", target_col]
+    working_df = working_df.sort_values(
+        "年月日"
+    ).reset_index(drop=True)
+
+    fix_columns = list(
+        dict.fromkeys(
+            resolved_feature_list + ["年月日", target_col]
+        )
+    )
     working_df = working_df.reindex(columns=fix_columns)
 
     X = working_df[resolved_feature_list].copy()
-    y = pd.to_numeric(working_df[target_col], errors="coerce")
-    frames_to_align = [X]
-    if reference_frame is not None:
-        frames_to_align.append(reference_frame[resolved_feature_list].copy())
-    for column in resolved_feature_list:
-        if column in resolved_categorical_cols and column in X.columns:
-            all_values: list[str] = []
-            for frame in frames_to_align:
-                if column in frame.columns:
-                    all_values.extend(frame[column].dropna().astype(str).tolist())
-            if all_values:
-                categories = pd.Index(sorted(set(all_values)))
-                categorical_dtype = pd.CategoricalDtype(categories=categories, ordered=False)
-                for frame in frames_to_align:
-                    if column in frame.columns:
-                        frame[column] = frame[column].astype(categorical_dtype)
-                X[column] = X[column].astype(categorical_dtype)
-                if reference_frame is not None and column in reference_frame.columns:
-                    reference_frame[column] = reference_frame[column].astype(categorical_dtype)
-        elif column in X.columns:
-            X[column] = pd.to_numeric(X[column], errors="coerce")
+    y = pd.to_numeric(
+        working_df[target_col],
+        errors="coerce",
+    )
 
+    # 参照用DataFrameはコピーして、元の検証データを不用意に変更しない。
+    reference = None
+    if reference_frame is not None:
+        reference = reference_frame.reindex(
+            columns=resolved_feature_list
+        ).copy()
+
+    # 設定指定のカテゴリ列に加えて、実際のDataFrameで
+    # object/category型になっている列もカテゴリ列として検出する。
+    category_columns = {
+        column
+        for column in configured_categorical_cols
+        if column in X.columns
+    }
+
+    for frame in [X, reference]:
+        if frame is None:
+            continue
+
+        category_columns.update(
+            frame.select_dtypes(
+                include=["object", "category"]
+            ).columns.tolist()
+        )
+
+    category_columns = sorted(
+        category_columns.intersection(X.columns)
+    )
+
+    # 全学習データと検証データでカテゴリの候補を統合し、
+    # 同じカテゴリ定義を使用する。
+    for column in resolved_feature_list:
+        if column in category_columns:
+            all_values = []
+
+            for frame in [X, reference]:
+                if frame is not None and column in frame.columns:
+                    all_values.extend(
+                        frame[column]
+                        .dropna()
+                        .astype(str)
+                        .tolist()
+                    )
+
+            categories = pd.Index(
+                sorted(set(all_values))
+            )
+
+            # 欠損値は欠損値のまま保持し、カテゴリ定義だけを共有する。
+            category_dtype = pd.CategoricalDtype(
+                categories=categories,
+                ordered=False,
+            )
+
+            X[column] = (
+                X[column]
+                .astype("string")
+                .astype(category_dtype)
+            )
+
+            if reference is not None and column in reference.columns:
+                reference[column] = (
+                    reference[column]
+                    .astype("string")
+                    .astype(category_dtype)
+                )
+
+        else:
+            # カテゴリ列以外は数値として扱う。
+            X[column] = pd.to_numeric(
+                X[column],
+                errors="coerce",
+            )
+
+            if reference is not None and column in reference.columns:
+                reference[column] = pd.to_numeric(
+                    reference[column],
+                    errors="coerce",
+                )
+
+    resolved_categorical_cols = category_columns
+
+    # 学習直前にカテゴリ列の状態をログへ出力する。
     logger.info(
-        "Final model retraining: rows=%d, features=%d, categories=%s",
+        "Final model retraining: rows=%d, features=%d",
         len(X),
         len(resolved_feature_list),
+    )
+    logger.info(
+        "Final categorical columns (%d): %s",
+        len(resolved_categorical_cols),
         resolved_categorical_cols,
     )
+
+    logger.info(
+        "Final training category dtypes: %s",
+        {
+            column: str(X[column].dtype)
+            for column in resolved_categorical_cols
+        },
+    )
+
+    # 全学習データで最終モデルを学習する。
     return train_lightgbm_model_on_full_data(
         X,
         y,
