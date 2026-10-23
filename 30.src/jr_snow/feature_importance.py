@@ -79,6 +79,7 @@ def save_shap_summary_plot(
     output_dir: str | Path,
     *,
     max_display: int = 20,
+    categorical_cols: list[str] | None = None,
 ) -> list[Path]:
     """SHAP要約図とウォーターフォール図を画像として保存する。"""
     if shap is None:
@@ -89,24 +90,30 @@ def save_shap_summary_plot(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
+    plot_frame = X.copy()
+    if categorical_cols:
+        for column in categorical_cols:
+            if column in plot_frame.columns and plot_frame[column].dtype != "category":
+                plot_frame[column] = plot_frame[column].astype("category")
+
     explainer = shap.TreeExplainer(model)
-    raw_values = explainer.shap_values(X)
-    values = _normalize_shap_values(raw_values, X.shape[1])
+    raw_values = explainer.shap_values(plot_frame)
+    values = _normalize_shap_values(raw_values, plot_frame.shape[1])
 
     summary_path = output / "shap_summary.png"
     plt.figure(figsize=(12, 8))
-    shap.summary_plot(values, X, show=False, max_display=max_display)
+    shap.summary_plot(values, plot_frame, show=False, max_display=max_display)
     plt.tight_layout()
     plt.savefig(summary_path, dpi=200, bbox_inches="tight")
     plt.close()
 
-    sample = X.iloc[[0]].copy()
-    sample_values = _normalize_shap_values(explainer.shap_values(sample), X.shape[1])
+    sample = plot_frame.iloc[[0]].copy()
+    sample_values = _normalize_shap_values(explainer.shap_values(sample), plot_frame.shape[1])
     explanation = shap.Explanation(
         values=sample_values[0],
         base_values=np.mean(sample_values[0]),
         data=sample.iloc[0].to_numpy(),
-        feature_names=list(X.columns),
+        feature_names=list(plot_frame.columns),
     )
     waterfall_path = output / "shap_waterfall_0.png"
     plt.figure(figsize=(12, 6))

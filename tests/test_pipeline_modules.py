@@ -105,6 +105,50 @@ def test_save_shap_summary_plot_creates_images(tmp_path: Path):
     assert len(paths) == 2
 
 
+def test_save_shap_summary_plot_casts_categorical_columns_for_lightgbm(tmp_path: Path):
+    """LightGBMのカテゴリ列はSHAP計算前にcategory型へ揃える。"""
+    class DummyTreeModel:
+        def __init__(self):
+            self.n_features_in_ = 2
+
+    shap = pytest.importorskip("shap")
+
+    class DummyExplainer:
+        def __init__(self, model, data):
+            self.model = model
+            self.data = data
+
+        def shap_values(self, X):
+            assert str(X["category"].dtype) == "category"
+            values = np.zeros((len(X), X.shape[1]))
+            return values
+
+    with patch("jr_snow.feature_importance.shap.TreeExplainer", return_value=DummyExplainer(None, None)):
+        X = pd.DataFrame({
+            "category": ["a", "b"],
+            "value": [1.0, 2.0],
+        })
+        output_dir = tmp_path / "shap"
+
+        paths = save_shap_summary_plot(DummyTreeModel(), X, output_dir, categorical_cols=["category"])
+
+    assert output_dir.joinpath("shap_summary.png").exists()
+    assert len(paths) == 2
+
+
+def test_fill_missing_by_same_day_time_location_average_ignores_all_none_candidates():
+    """候補が全部NaNでも補完処理が落ちず、NaNのまま保持される。"""
+    df = pd.DataFrame({
+        "金沢_気温_1_00": [np.nan, np.nan],
+        "富山_気温_1_00": [np.nan, np.nan],
+    })
+
+    result = fill_missing_by_same_day_time_location_average(df)
+
+    assert result["金沢_気温_1_00"].isna().all()
+    assert result["富山_気温_1_00"].isna().all()
+
+
 def test_parse_args_accepts_final_inference_strategy():
     """実行時CLIで最終推論戦略を選べることを確認する。"""
     with patch.object(sys, "argv", ["run.py", "--mode", "full", "--final-model-strategy", "cv_average"]):
@@ -373,6 +417,24 @@ def test_fill_missing_by_same_day_time_location_average_uses_mode_for_string_win
     filled = fill_missing_by_same_day_time_location_average(df)
 
     assert filled.loc[1, "富山_風向__1_00"] == "北北西"
+
+
+def test_fill_missing_by_same_day_time_location_average_handles_categorical_mode_values():
+    """カテゴリ列に新しい最頻値が来ても、カテゴリ化を壊さずに補完できる。"""
+    df = pd.DataFrame(
+        {
+            "年月日": [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-01")],
+            "列車番号": [1, 2],
+            "富山_風向__1_00": pd.Categorical(["北北西", pd.NA], categories=["北北西", "北", "北西"]),
+            "糸魚川_風向__1_00": ["南", "南"],
+            "金沢_風向__1_00": ["南", "北"],
+        }
+    )
+
+    filled = fill_missing_by_same_day_time_location_average(df)
+
+    assert filled.loc[1, "富山_風向__1_00"] == "南"
+    assert isinstance(filled["富山_風向__1_00"].dtype, pd.api.extensions.ExtensionDtype) is False or filled.iloc[1, 0] == "南"
 
 
 def test_apply_two_stage_snow_prediction_uses_winter_flag_and_probability_threshold():

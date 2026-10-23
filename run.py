@@ -26,7 +26,7 @@ from jr_snow.cross_validation import time_series_folds
 from jr_snow.data import load_train_test_data
 from jr_snow.evaluation import compute_roc_auc, compute_wmae, summarize_prediction_stats, summarize_target_stats
 from jr_snow.feature_importance import save_feature_importance, save_shap_summary_plot
-from jr_snow.features import add_document_weather_features, prepare_model_inputs
+from jr_snow.features import add_document_weather_features, build_engineered_feature_frame, prepare_model_inputs
 from jr_snow.logging_utils import setup_logger
 from jr_snow.model_registry import save_model_artifact
 from jr_snow.modeling import (
@@ -332,42 +332,62 @@ def train_final_model_on_all_data(
     target_col: str = "合計",
     num_boost_round: int = 1000,
     logger: logging.Logger | None = None,
+    feature_list: list[str] | None = None,
+    categorical_cols: list[str] | None = None,
+    threshold: float = 5.0,
+    reference_frame: pd.DataFrame | None = None,
 ):
     """CVの検証データを含めて、利用可能な全学習データで最終モデルを再学習する。"""
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    working_df = df.copy()
-    working_df = add_document_weather_features(working_df)
+    resolved_feature_list = list(feature_list or feature_columns.get("feature_list", []))
+    resolved_categorical_cols = list(categorical_cols or feature_columns.get("categorical_cols", []))
+    resolved_categorical_cols = [
+        column for column in resolved_categorical_cols if column in resolved_feature_list
+    ]
+
+    working_df = build_engineered_feature_frame(df.copy(), threshold=threshold)
     if "年月日" in working_df.columns:
         working_df["年月日"] = pd.to_datetime(working_df["年月日"])
     working_df = working_df.sort_values("年月日").reset_index(drop=True)
 
-    feature_list = list(feature_columns.get("feature_list", []))
-    engineered_cols = [
-        column for column in working_df.columns if column not in feature_list and "ge_5.0_C" in column
-    ]
-    feature_list = list(dict.fromkeys(feature_list + engineered_cols))
-    categorical_cols = [
-        column for column in feature_columns.get("categorical_cols", []) if column in feature_list
-    ]
-    fix_columns = feature_list + ["年月日", target_col]
+    fix_columns = resolved_feature_list + ["年月日", target_col]
     working_df = working_df.reindex(columns=fix_columns)
 
-    X = working_df[feature_list].copy()
-    y = working_df[target_col].copy()
-    for column in feature_list:
-        if column in categorical_cols and column in X.columns:
-            X[column] = X[column].astype("category")
+    X = working_df[resolved_feature_list].copy()
+    y = pd.to_numeric(working_df[target_col], errors="coerce")
+    frames_to_align = [X]
+    if reference_frame is not None:
+        frames_to_align.append(reference_frame[resolved_feature_list].copy())
+    for column in resolved_feature_list:
+        if column in resolved_categorical_cols and column in X.columns:
+            all_values: list[str] = []
+            for frame in frames_to_align:
+                if column in frame.columns:
+                    all_values.extend(frame[column].dropna().astype(str).tolist())
+            if all_values:
+                categories = pd.Index(sorted(set(all_values)))
+                categorical_dtype = pd.CategoricalDtype(categories=categories, ordered=False)
+                for frame in frames_to_align:
+                    if column in frame.columns:
+                        frame[column] = frame[column].astype(categorical_dtype)
+                X[column] = X[column].astype(categorical_dtype)
+                if reference_frame is not None and column in reference_frame.columns:
+                    reference_frame[column] = reference_frame[column].astype(categorical_dtype)
         elif column in X.columns:
             X[column] = pd.to_numeric(X[column], errors="coerce")
 
-    y = pd.to_numeric(y, errors="coerce")
-    logger.info("Final model retraining: rows=%d, features=%d, categories=%s", len(X), len(feature_list), categorical_cols)
+    logger.info(
+        "Final model retraining: rows=%d, features=%d, categories=%s",
+        len(X),
+        len(resolved_feature_list),
+        resolved_categorical_cols,
+    )
     return train_lightgbm_model_on_full_data(
         X,
         y,
-        categorical_cols,
+        resolved_categorical_cols,
         model_params,
         num_boost_round=num_boost_round,
     )
@@ -482,7 +502,16 @@ def main() -> None:
         logger.info(f"Train/valid/test rows: {len(prepared['X_train'])}, {len(prepared['X_valid'])}, {len(prepared['df_test_processed'])}")
         return
 
-    if intermediate_path.exists():
+    if args.mode in {"train", "full"}:
+        prepared = prepare_model_inputs(
+            df_train=train_df,
+            df_test=test_df,
+            feature_columns=feature_columns,
+            split_date=config["split_date"],
+        )
+        save_intermediate_dataset(prepared, intermediate_path)
+        logger.info(f"Regenerated intermediate dataset for training/full mode: {intermediate_path}")
+    elif intermediate_path.exists():
         prepared = load_intermediate_dataset(intermediate_path)
         logger.info(f"Using cached intermediate dataset: {intermediate_path}")
     else:
@@ -520,13 +549,25 @@ def main() -> None:
                 target_col="合計",
                 num_boost_round=args.num_boost_round,
                 logger=logger,
+                feature_list=prepared["feature_list"],
+                categorical_cols=prepared["categorical_cols"],
+                threshold=thresholds,
+                reference_frame=prepared["X_valid"],
             )
             model_version_path = save_model_artifact(final_model, ROOT / "artifacts", prefix="lightgbm_model")
             save_feature_importance(final_model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
             try:
-                save_shap_summary_plot(final_model, prepared["X_valid"], ROOT / "artifacts" / "shap")
-            except ModuleNotFoundError:
-                logger.warning("SHAP is not installed; skipping plot export for the final model.")
+                save_shap_summary_plot(
+                    final_model,
+                    prepared["X_valid"],
+                    ROOT / "artifacts" / "shap",
+                    categorical_cols=prepared["categorical_cols"],
+                )
+            except (ModuleNotFoundError, ValueError):
+                logger.warning(
+                    "SHAP plot generation failed for the final model; skipping plot export so submission generation can continue.",
+                    exc_info=True,
+                )
             save_validation_report(
                 {
                     "valid_wmae": compute_wmae(prepared["y_valid"], final_model.predict(prepared["X_valid"])),

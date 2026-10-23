@@ -143,7 +143,7 @@ def fill_missing_by_same_day_time_location_average(df: pd.DataFrame) -> pd.DataF
     def most_frequent_first(values: pd.Series) -> object | float | None:
         non_null = values.dropna()
         if non_null.empty:
-            return None
+            return np.nan
         counts: dict[object, int] = {}
         first_index: dict[object, int] = {}
         for index, value in enumerate(non_null.tolist()):
@@ -172,11 +172,31 @@ def fill_missing_by_same_day_time_location_average(df: pd.DataFrame) -> pd.DataF
         if force or column_is_numeric_like(output[column]):
             output[column] = pd.to_numeric(output[column], errors="coerce")
 
-    def assign_value_safely(column: str, index: Any, value: Any) -> None:
+    def ensure_fillable_column(column: str) -> None:
         if column not in output.columns:
             return
         if isinstance(output[column].dtype, pd.CategoricalDtype):
             output[column] = output[column].astype(object)
+
+    def row_mode_value(row: pd.Series) -> object | None:
+        non_null = row.dropna()
+        if non_null.empty:
+            return np.nan
+        counts: dict[object, int] = {}
+        first_index: dict[object, int] = {}
+        for index, value in enumerate(non_null.tolist()):
+            if value not in counts:
+                counts[value] = 0
+                first_index[value] = index
+            counts[value] += 1
+        max_count = max(counts.values())
+        candidates = [value for value, count in counts.items() if count == max_count]
+        return min(candidates, key=lambda value: first_index[value])
+
+    def assign_value_safely(column: str, index: Any, value: Any) -> None:
+        if column not in output.columns:
+            return
+        ensure_fillable_column(column)
         output.at[index, column] = value
 
     if "地点" in output.columns:
@@ -199,28 +219,20 @@ def fill_missing_by_same_day_time_location_average(df: pd.DataFrame) -> pd.DataF
             candidates.append(column)
 
         for column in candidates:
-            na_idx = output.index[output[column].isna()].tolist()
-            for idx in na_idx:
-                location = output.at[idx, "地点"]
-                target_time = output.at[idx, "_補完時刻"]
-                same_time_rows = output.loc[output["_補完時刻"] == target_time]
-                if same_time_rows.empty:
-                    continue
-                other_locations = same_time_rows.loc[same_time_rows["地点"] != location, column]
-                candidate_values = other_locations.dropna()
-                if candidate_values.empty:
-                    candidate_values = same_time_rows[column].dropna()
-                if candidate_values.empty:
-                    continue
-                numeric_candidate_values = pd.to_numeric(candidate_values, errors="coerce")
-                if numeric_candidate_values.notna().any():
-                    ensure_numeric_column_if_possible(column, force=True)
-                    assign_value_safely(column, idx, float(numeric_candidate_values.mean()))
-                elif column_is_numeric_like(output[column]):
-                    ensure_numeric_column_if_possible(column)
-                    assign_value_safely(column, idx, float(pd.to_numeric(output[column], errors="coerce").mean()))
-                else:
-                    assign_value_safely(column, idx, most_frequent_first(candidate_values))
+            if output[column].isna().sum() == 0:
+                continue
+            if column_is_numeric_like(output[column]):
+                ensure_numeric_column_if_possible(column, force=True)
+                group_mean = output.groupby(["地点", "_補完時刻"], dropna=False)[column].transform(
+                    lambda values: pd.to_numeric(values, errors="coerce").mean()
+                )
+                output[column] = pd.to_numeric(output[column], errors="coerce").fillna(group_mean)
+            else:
+                ensure_fillable_column(column)
+                group_mode = output.groupby(["地点", "_補完時刻"], dropna=False)[column].transform(
+                    most_frequent_first
+                )
+                output[column] = output[column].fillna(group_mode)
 
         return output.drop(columns=["_補完時刻"], errors="ignore")
 
@@ -249,20 +261,22 @@ def fill_missing_by_same_day_time_location_average(df: pd.DataFrame) -> pd.DataF
         missing_mask = output[column].isna()
         if not missing_mask.any():
             continue
-        for idx in output.index[missing_mask]:
-            candidate_values = output.loc[idx, other_location_columns]
-            candidate_values = candidate_values.dropna()
-            if candidate_values.empty:
+        if column_is_numeric_like(output[column]):
+            ensure_numeric_column_if_possible(column, force=True)
+            numeric_candidate = output[other_location_columns].apply(pd.to_numeric, errors="coerce")
+            output[column] = pd.to_numeric(output[column], errors="coerce").fillna(numeric_candidate.mean(axis=1))
+        else:
+            ensure_fillable_column(column)
+            candidate_frame = output.loc[missing_mask, other_location_columns].copy()
+            if candidate_frame.empty:
                 continue
-            numeric_candidate_values = pd.to_numeric(candidate_values, errors="coerce")
-            if numeric_candidate_values.notna().any():
-                ensure_numeric_column_if_possible(column, force=True)
-                assign_value_safely(column, idx, float(numeric_candidate_values.mean()))
-            elif column_is_numeric_like(output[column]):
-                ensure_numeric_column_if_possible(column)
-                assign_value_safely(column, idx, float(pd.to_numeric(output[column], errors="coerce").mean()))
-            else:
-                assign_value_safely(column, idx, most_frequent_first(candidate_values))
+            row_fill_values = candidate_frame.apply(row_mode_value, axis=1)
+            valid_fill_mask = row_fill_values.notna().to_numpy()
+            if not valid_fill_mask.any():
+                continue
+            output.loc[missing_mask, column] = np.nan
+            valid_rows = output.index[missing_mask][valid_fill_mask]
+            output.loc[valid_rows, column] = row_fill_values[valid_fill_mask].to_numpy()
 
     for column in [column for column in output.columns if column not in {"年月日", "年月日時", "時刻", "停車時刻"}]:
         if output[column].isna().sum() == 0:
@@ -273,6 +287,7 @@ def fill_missing_by_same_day_time_location_average(df: pd.DataFrame) -> pd.DataF
                 date_fill = output.groupby("年月日")[column].transform("mean")
                 output[column] = output[column].fillna(date_fill)
             else:
+                ensure_fillable_column(column)
                 date_fill = output.groupby("年月日")[column].transform(most_frequent_first)
                 output[column] = output[column].fillna(date_fill)
 
@@ -283,6 +298,7 @@ def fill_missing_by_same_day_time_location_average(df: pd.DataFrame) -> pd.DataF
             overall_fill = float(pd.to_numeric(output[column], errors="coerce").mean())
             output[column] = output[column].fillna(overall_fill)
         else:
+            ensure_fillable_column(column)
             overall_fill = most_frequent_first(output[column])
             if overall_fill is not None:
                 output[column] = output[column].fillna(overall_fill)

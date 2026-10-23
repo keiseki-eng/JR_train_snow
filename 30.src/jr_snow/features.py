@@ -83,6 +83,23 @@ def split_train_valid(
     return split_time(df_train, split_col="年月日", target_col=target_col, split_date=pd.Timestamp(split_date))
 
 
+def align_category_dtypes(frames: list[pd.DataFrame], columns: list[str]) -> None:
+    """複数のDataFrameで同一のカテゴリ定義を共有するように揃える。"""
+    for column in columns:
+        all_values: list[str] = []
+        for frame in frames:
+            if column not in frame.columns:
+                continue
+            all_values.extend(frame[column].dropna().astype(str).tolist())
+        if not all_values:
+            continue
+        categories = pd.Index(sorted(set(all_values)))
+        dtype = pd.CategoricalDtype(categories=categories, ordered=False)
+        for frame in frames:
+            if column in frame.columns:
+                frame[column] = frame[column].astype(dtype)
+
+
 def prepare_model_inputs(
     df_train: pd.DataFrame,
     df_test: pd.DataFrame,
@@ -120,12 +137,8 @@ def prepare_model_inputs(
 
     cat_cols = [column for column in categorical_cols if column in X_train.columns]
     obj_cols = X_train.select_dtypes(include=["object"]).columns.tolist()
-
-    # LightGBMはカテゴリ変数に対して明示的な型指定が必要なため、カテゴリ列を変換する。
-    for frame in [X_train, X_valid, df_test_processed]:
-        columns = sorted(set(cat_cols + obj_cols).intersection(frame.columns))
-        if columns:
-            frame[columns] = frame[columns].astype("category")
+    category_columns = sorted(set(cat_cols + obj_cols).intersection(X_train.columns))
+    align_category_dtypes([X_train, X_valid, df_test_processed], category_columns)
 
     # 日照時間の文字列が混ざっている場合は数値化してモデル入力に適した形式に整える。
     for column in [column for column in X_train.columns if "日照時間" in column]:
