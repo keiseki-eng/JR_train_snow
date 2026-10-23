@@ -157,11 +157,51 @@ def prepare_model_inputs(
         .intersection(X_train.columns)
     )
 
-    # train / valid / testでカテゴリの定義を統一する。
-    align_category_dtypes(
-        [X_train, X_valid, df_test_processed],
-        category_columns,
-    )
+    
+    # 学習データと検証データだけからカテゴリ定義を作成し、
+    # テストデータには同じ定義を適用する。
+    for column in category_columns:
+        all_values = pd.concat(
+            [
+                X_train[column].dropna().astype(str),
+                X_valid[column].dropna().astype(str),
+            ],
+            ignore_index=True,
+        )
+
+        categories = sorted(all_values.unique().tolist())
+
+        dtype = pd.CategoricalDtype(
+            categories=categories,
+            ordered=False,
+        )
+
+        X_train[column] = X_train[column].astype("string").astype(dtype)
+        X_valid[column] = X_valid[column].astype("string").astype(dtype)
+        df_test_processed[column] = (
+            df_test_processed[column].astype("string").astype(dtype)
+        )
+
+
+    # テストデータも、学習・検証データから作ったカテゴリ定義に揃える。
+    # 学習時に存在しないカテゴリ値は欠損値として扱う。
+    for column in category_columns:
+        if column not in X_train.columns or column not in df_test_processed.columns:
+            continue
+
+        categories = X_train[column].cat.categories
+
+        dtype = pd.CategoricalDtype(
+            categories=categories,
+            ordered=False,
+        )
+
+        df_test_processed[column] = (
+            df_test_processed[column]
+            .astype("string")
+            .astype(dtype)
+        )
+
 
 
     # 日照時間の文字列が混ざっている場合は数値化してモデル入力に適した形式に整える。

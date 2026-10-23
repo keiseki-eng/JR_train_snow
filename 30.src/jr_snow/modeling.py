@@ -56,10 +56,54 @@ def train_lightgbm_model(
         model.fit(X_train, y_train)
         return model
 
-    # 学習用データセットと検証用データセットを作り、カテゴリ変数を認識させる。
-    lgb_train = lgb.Dataset(X_train, y_train, categorical_feature=categorical_cols)
-    lgb_valid = lgb.Dataset(X_valid, y_valid, reference=lgb_train, categorical_feature=categorical_cols)
+        # 学習用・検証用の列構成を統一する
+    X_train = X_train.copy()
+    X_valid = X_valid.reindex(columns=X_train.columns).copy()
 
+    # 設定上のカテゴリ列に加え、object/category型の列も検出する
+    category_columns = set(
+        column for column in categorical_cols
+        if column in X_train.columns
+    )
+
+    for frame in (X_train, X_valid):
+        category_columns.update(
+            frame.select_dtypes(include=["object", "category"]).columns
+        )
+
+    category_columns = sorted(category_columns)
+
+    # 学習用・検証用でカテゴリの候補と順序を完全に統一する
+    for column in category_columns:
+        all_values = pd.concat(
+            [X_train[column], X_valid[column]],
+            ignore_index=True,
+        ).dropna().astype(str)
+
+        categories = sorted(all_values.unique().tolist())
+        dtype = pd.CategoricalDtype(
+            categories=categories,
+            ordered=False,
+        )
+
+        X_train[column] = X_train[column].astype("string").astype(dtype)
+        X_valid[column] = X_valid[column].astype("string").astype(dtype)
+
+    # categorical_feature の指定は学習用データセットだけに行う。
+    # 検証用は reference=lgb_train から設定を引き継ぐ。
+    lgb_train = lgb.Dataset(
+        X_train,
+        label=y_train,
+        categorical_feature=category_columns,
+        free_raw_data=False,
+    )
+
+    lgb_valid = lgb.Dataset(
+        X_valid,
+        label=y_valid,
+        reference=lgb_train,
+        free_raw_data=False,
+    )
     model = lgb.train(
         model_params,
         lgb_train,
