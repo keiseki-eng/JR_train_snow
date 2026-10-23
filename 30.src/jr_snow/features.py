@@ -144,11 +144,15 @@ def prepare_model_inputs(
 
     # 設定で指定された列だけでなく、object型・category型の列も
     # カテゴリ列として統一して扱う。
-    object_cols = X_train.select_dtypes(
+    # 分割前の学習データ全体からカテゴリ列を検出する。
+    # 検証期間にだけ文字列が存在する列も見落とさない。
+    full_train_features = df_train[feature_list]
+
+    object_cols = full_train_features.select_dtypes(
         include=["object"]
     ).columns.tolist()
 
-    existing_category_cols = X_train.select_dtypes(
+    existing_category_cols = full_train_features.select_dtypes(
         include=["category"]
     ).columns.tolist()
 
@@ -209,6 +213,15 @@ def prepare_model_inputs(
         X_train[column] = pd.to_numeric(X_train[column], errors="coerce")
         X_valid[column] = pd.to_numeric(X_valid[column], errors="coerce")
         df_test_processed[column] = pd.to_numeric(df_test_processed[column], errors="coerce")
+
+    # 数値変換後の実際のdtypeに基づいてカテゴリ列一覧を更新する。
+    # 日照時間など、途中で数値型へ変更された列をカテゴリ列から除外する。
+    category_columns = [
+        column
+        for column in category_columns
+        if isinstance(X_train[column].dtype, pd.CategoricalDtype)
+    ]
+
 
     return {
         "X_train": X_train,
