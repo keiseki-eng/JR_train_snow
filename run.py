@@ -482,13 +482,16 @@ def train_final_model_on_all_data(
     )
 
     # 全学習データで最終モデルを学習する。
-    return train_lightgbm_model_on_full_data(
+    model = train_lightgbm_model_on_full_data(
         X,
         y,
         resolved_categorical_cols,
         model_params,
         num_boost_round=num_boost_round,
     )
+
+    # カテゴリ定義を統一した検証データも呼び出し元へ返す。
+    return model, reference
 
 
 def select_model_for_final_inference(
@@ -640,7 +643,7 @@ def main() -> None:
             else:
                 raise FileNotFoundError(f"Skip-final-training is enabled but no model exists at {model_path}")
         else:
-            final_model = train_final_model_on_all_data(
+            final_model, final_X_valid = train_final_model_on_all_data(
                 train_df,
                 feature_columns,
                 config["MODEL_PARAMS"],
@@ -657,7 +660,7 @@ def main() -> None:
             try:
                 save_shap_summary_plot(
                     final_model,
-                    prepared["X_valid"],
+                    final_X_valid,
                     ROOT / "artifacts" / "shap",
                     categorical_cols=prepared["categorical_cols"],
                 )
@@ -668,7 +671,10 @@ def main() -> None:
                 )
             save_validation_report(
                 {
-                    "valid_wmae": compute_wmae(prepared["y_valid"], final_model.predict(prepared["X_valid"])),
+                    "valid_wmae": compute_wmae(
+                        prepared["y_valid"],
+                        final_model.predict(final_X_valid),
+                    ),
                     "train_rows": len(train_df),
                     "valid_rows": len(prepared["y_valid"]),
                     "test_rows": len(prepared["df_test_processed"]),
