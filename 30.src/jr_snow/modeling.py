@@ -152,14 +152,18 @@ def train_lightgbm_model_on_full_data(
     return model
 
 
-def predict_submission(model: Any, df_test: pd.DataFrame, feature_list: list[str]) -> np.ndarray:
-    """学習時の特徴量順・カテゴリ定義を復元して提出用データを予測する。"""
+def align_prediction_features(model: Any, df: pd.DataFrame, feature_list: list[str]) -> pd.DataFrame:
+    """学習済みモデルの列順・カテゴリ定義に推論用DataFrameを合わせる。
+
+    LightGBMは学習時のpandasカテゴリ列と推論時のカテゴリ列が一致しないと
+    ValueErrorを送出する。テストだけでなく検証データにも同じ処理を適用する。
+    """
     model_features = (
         list(model.feature_name())
         if callable(getattr(model, "feature_name", None))
         else list(feature_list)
     )
-    prediction_df = df_test.reindex(columns=model_features).copy()
+    prediction_df = df.reindex(columns=model_features).copy()
 
     categorical_cols = getattr(model, "_jr_snow_categorical_cols", None)
     pandas_categorical = getattr(model, "pandas_categorical", None)
@@ -172,29 +176,24 @@ def predict_submission(model: Any, df_test: pd.DataFrame, feature_list: list[str
                 f"categorical_cols={categorical_cols}"
             )
 
-        # Use the exact category vocabulary saved by LightGBM during training.
-        # Unknown test categories become NaN, matching LightGBM's training semantics.
+        categorical_set = set(categorical_cols)
         for column, categories in zip(categorical_cols, pandas_categorical):
             if column not in prediction_df.columns:
-                raise ValueError(
-                    f"学習時のカテゴリ特徴量が推論データにありません: {column}"
-                )
-            dtype = pd.CategoricalDtype(
-                categories=list(categories),
-                ordered=False,
-            )
-            prediction_df[column] = (
-                prediction_df[column].astype("string").astype(dtype)
-            )
+                raise ValueError(f"学習時のカテゴリ特徴量が推論データにありません: {column}")
+            dtype = pd.CategoricalDtype(categories=list(categories), ordered=False)
+            prediction_df[column] = prediction_df[column].astype("string").astype(dtype)
 
-        # Prevent test-only object/category columns from silently becoming extra
-        # categorical features and triggering LightGBM's category-count mismatch.
+        # 学習時にカテゴリ型でなかった列を、入力データ側のdtypeに依存させない。
         for column in prediction_df.columns:
-            if column not in categorical_cols:
-                prediction_df[column] = pd.to_numeric(
-                    prediction_df[column], errors="coerce"
-                )
+            if column not in categorical_set:
+                prediction_df[column] = pd.to_numeric(prediction_df[column], errors="coerce")
 
+    return prediction_df
+
+
+def predict_submission(model: Any, df_test: pd.DataFrame, feature_list: list[str]) -> np.ndarray:
+    """学習時の特徴量順・カテゴリ定義を復元して提出用データを予測する。"""
+    prediction_df = align_prediction_features(model, df_test, feature_list)
     return model.predict(prediction_df)
 
 def apply_prediction_correction(predictions: np.ndarray, correction_amount: float) -> np.ndarray:
