@@ -16,9 +16,9 @@
 【記入欄】
 
 ## 3. 実装方針
-sssss
-sssss
-sssss
+- sssss
+- sssss
+- 実行パイプラインはNotebookでの実装とし、最終的に.pyファイル化できるような拡張性をもたせること
 3.1 設定ファイル
 `config_xxxxxxx.yaml`に以下を定義する
 yyy
