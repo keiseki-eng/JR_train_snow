@@ -30,6 +30,7 @@ from jr_snow.features import add_document_weather_features, build_engineered_fea
 from jr_snow.logging_utils import setup_logger
 from jr_snow.model_registry import save_model_artifact
 from jr_snow.modeling import (
+    align_prediction_features,
     apply_prediction_correction,
     predict_submission,
     save_submission,
@@ -701,9 +702,14 @@ def main() -> None:
             raise ValueError(f"No model is available for final inference strategy='{strategy}'")
         predictions = predict_submission(model, prepared["df_test_processed"], prepared["feature_list"])
         predictions = apply_prediction_correction(predictions, config.get("correction_amount", 0.0))
+        validation_X_aligned = align_prediction_features(
+            model,
+            validation_X_for_prediction,
+            prepared["feature_list"],
+        )
         valid_wmae = compute_wmae(
             prepared["y_valid"],
-            model.predict(validation_X_for_prediction),
+            model.predict(validation_X_aligned),
         )
 
         if args.two_stage_snow_prediction:
