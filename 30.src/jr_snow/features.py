@@ -121,8 +121,11 @@ def prepare_model_inputs(
     df_train = build_engineered_feature_frame(df_train, threshold=threshold)
     df_test = build_engineered_feature_frame(df_test, threshold=threshold)
 
+    threshold_suffix = f"ge_{threshold}_C"
     engineered_cols = [
-        column for column in df_train.columns if column not in feature_list and "ge_5.0_C" in column
+        column
+        for column in df_train.columns
+        if column not in feature_list and threshold_suffix in column
     ]
     feature_list = list(dict.fromkeys(feature_list + engineered_cols))
 
@@ -173,38 +176,17 @@ def prepare_model_inputs(
             ignore_index=True,
         )
 
+        # 全欠損のカテゴリ列もカテゴリ型として確定させる。
+        # categories=[] の場合に元のdtypeを残すと、後段の .cat アクセスが失敗する。
         categories = sorted(all_values.unique().tolist())
-
         dtype = pd.CategoricalDtype(
             categories=categories,
             ordered=False,
         )
 
-        X_train[column] = X_train[column].astype("string").astype(dtype)
-        X_valid[column] = X_valid[column].astype("string").astype(dtype)
-        df_test_processed[column] = (
-            df_test_processed[column].astype("string").astype(dtype)
-        )
-
-
-    # テストデータも、学習・検証データから作ったカテゴリ定義に揃える。
-    # 学習時に存在しないカテゴリ値は欠損値として扱う。
-    for column in category_columns:
-        if column not in X_train.columns or column not in df_test_processed.columns:
-            continue
-
-        categories = X_train[column].cat.categories
-
-        dtype = pd.CategoricalDtype(
-            categories=categories,
-            ordered=False,
-        )
-
-        df_test_processed[column] = (
-            df_test_processed[column]
-            .astype("string")
-            .astype(dtype)
-        )
+        for frame in (X_train, X_valid, df_test_processed):
+            if column in frame.columns:
+                frame[column] = frame[column].astype("string").astype(dtype)
 
 
 
