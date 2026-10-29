@@ -158,15 +158,38 @@ def align_prediction_features(model: Any, df: pd.DataFrame, feature_list: list[s
     LightGBMは学習時のpandasカテゴリ列と推論時のカテゴリ列が一致しないと
     ValueErrorを送出する。テストだけでなく検証データにも同じ処理を適用する。
     """
+    stored_features = getattr(model, "_jr_snow_feature_names", None)
     model_features = (
         list(model.feature_name())
         if callable(getattr(model, "feature_name", None))
-        else list(feature_list)
+        else list(stored_features or feature_list)
     )
     prediction_df = df.reindex(columns=model_features).copy()
 
     categorical_cols = getattr(model, "_jr_snow_categorical_cols", None)
     pandas_categorical = getattr(model, "pandas_categorical", None)
+
+    # 新形式モデルにはカテゴリ列名を明示保存する。旧形式モデルは、
+    # 入力DataFrameのカテゴリ列とLightGBMが保持するカテゴリ定義の数が一致するときのみ復元する。
+    if categorical_cols is None and pandas_categorical is not None:
+        inferred = [
+            column for column in prediction_df.columns
+            if isinstance(prediction_df[column].dtype, pd.CategoricalDtype)
+            or pd.api.types.is_object_dtype(prediction_df[column].dtype)
+            or pd.api.types.is_string_dtype(prediction_df[column].dtype)
+        ]
+        if len(inferred) == len(pandas_categorical):
+            categorical_cols = inferred
+        elif len(pandas_categorical) == 0:
+            categorical_cols = []
+        else:
+            raise ValueError(
+                "旧形式モデルのカテゴリ列を安全に復元できません。"
+                f" model_categories={len(pandas_categorical)}, "
+                f"candidate_columns={inferred}. "
+                "このモデルを --skip-final-training で再利用する前に、"
+                "通常の最終学習でモデルを再生成してください。"
+            )
 
     if categorical_cols is not None and pandas_categorical is not None:
         if len(categorical_cols) != len(pandas_categorical):
@@ -187,6 +210,10 @@ def align_prediction_features(model: Any, df: pd.DataFrame, feature_list: list[s
         for column in prediction_df.columns:
             if column not in categorical_set:
                 prediction_df[column] = pd.to_numeric(prediction_df[column], errors="coerce")
+    else:
+        # LightGBM以外のモデルやメタデータのない旧モデルでは、モデル入力を数値へ正規化する。
+        for column in prediction_df.columns:
+            prediction_df[column] = pd.to_numeric(prediction_df[column], errors="coerce")
 
     return prediction_df
 
