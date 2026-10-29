@@ -660,8 +660,28 @@ def main() -> None:
                 reference_frame=prepared["X_valid"],
             )
             validation_X_for_prediction = final_X_valid
+
+            # モデル本体と推論スキーマを一体で保持する。
+            # LightGBMの実際の特徴量名・順序を正とし、旧形式モデルとの差を明示する。
+            if callable(getattr(final_model, "feature_name", None)):
+                final_model._jr_snow_feature_names = list(final_model.feature_name())
+            else:
+                final_model._jr_snow_feature_names = list(prepared["feature_list"])
+            if getattr(final_model, "_jr_snow_categorical_cols", None) is None:
+                final_model._jr_snow_categorical_cols = [
+                    column for column in prepared["categorical_cols"]
+                    if column in final_model._jr_snow_feature_names
+                ]
+
             model_version_path = save_model_artifact(final_model, ROOT / "artifacts", prefix="lightgbm_model")
-            save_feature_importance(final_model, prepared["feature_list"], ROOT / "artifacts" / "feature_importance.csv")
+
+            # --skip-final-training が読む既定パスにも同じモデルを保存し、
+            # 通常学習とモデル再利用で別世代のモデルが混在するのを防ぐ。
+            with model_path.open("wb") as file:
+                pickle.dump(final_model, file)
+            logger.info(f"Reusable model saved: {model_path}")
+
+            save_feature_importance(final_model, final_model._jr_snow_feature_names, ROOT / "artifacts" / "feature_importance.csv")
             try:
                 save_shap_summary_plot(
                     final_model,
