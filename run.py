@@ -571,7 +571,10 @@ def main() -> None:
         path_config=path_config,
     )
 
+    # 着雪判定用thresholdsと、気温特徴量生成用temperature_thresholdは別設定にする。
+    # 既存設定にtemperature_thresholdがなければ、従来の既定値5.0℃を使用する。
     thresholds = float(config.get("thresholds", 0.0))
+    temperature_threshold = float(config.get("temperature_threshold", 5.0))
     train_before_rows = len(train_df)
     if any(column in train_df.columns for column in ("冬季フラグ", "着雪有無フラグ", "着雪有無", "着雪確率")):
         train_df = filter_snow_presence_records(train_df, thresholds=thresholds)
@@ -598,6 +601,7 @@ def main() -> None:
             df_test=test_df,
             feature_columns=feature_columns,
             split_date=config["split_date"],
+            threshold=temperature_threshold,
         )
         save_intermediate_dataset(prepared, intermediate_path)
         logger.info(f"Intermediate dataset saved: {intermediate_path}")
@@ -611,6 +615,7 @@ def main() -> None:
             df_test=test_df,
             feature_columns=feature_columns,
             split_date=config["split_date"],
+            threshold=temperature_threshold,
         )
         save_intermediate_dataset(prepared, intermediate_path)
         logger.info(f"Regenerated intermediate dataset for training/full mode: {intermediate_path}")
@@ -623,6 +628,7 @@ def main() -> None:
             df_test=test_df,
             feature_columns=feature_columns,
             split_date=config["split_date"],
+            threshold=temperature_threshold,
         )
         save_intermediate_dataset(prepared, intermediate_path)
         logger.info(f"Intermediate dataset saved: {intermediate_path}")
@@ -656,7 +662,7 @@ def main() -> None:
                 logger=logger,
                 feature_list=prepared["feature_list"],
                 categorical_cols=prepared["categorical_cols"],
-                threshold=thresholds,
+                threshold=temperature_threshold,
                 reference_frame=prepared["X_valid"],
             )
             validation_X_for_prediction = final_X_valid
