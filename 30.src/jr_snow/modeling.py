@@ -236,6 +236,7 @@ def save_submission(predictions: np.ndarray, output_path: str | Path = "submit.c
     サンプル提出ファイルと同じ形式で、行番号 + 予測値の2列を保存する。
     """
     values = np.asarray(predictions, dtype=float).reshape(-1)
+    values = np.maximum(values, 0.0)
     output = pd.DataFrame({
         "row_id": np.arange(len(values), dtype=int),
         "予測値": values,
